@@ -1,0 +1,25 @@
+# Dependencies
+server/node_modules/
+creator-app/node_modules/
+
+# Build output
+server/dist/
+server/public/
+creator-app/dist/
+
+# Environment variables
+server/.env
+
+# Data
+server/data/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
