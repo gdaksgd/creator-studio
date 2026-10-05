@@ -1,5 +1,8 @@
 import { useEffect, useState, useMemo } from 'react';
 import { api, type AccountInfo, type SyncResult, type SyncHistoryEntry } from '../api/client';
+import { useTopicStore } from '../store/topicStore';
+import { formatDeviation, formatViews } from '../utils/prediction';
+import type { BenchmarkSnapshot } from '../types';
 
 // ─── Chart Components ──────────────────────────────────────
 
@@ -136,6 +139,23 @@ function StatCard({ label, value, sublabel, accent }: {
   );
 }
 
+// ─── 基准线表格辅助 ────────────────────────────────────────
+
+const BENCHMARK_SCOPE_LABEL: Record<string, string> = {
+  category: '品类',
+  partition: '子分区',
+  game: '游戏区',
+};
+
+/** 品类在前、大盘在后 */
+const BENCHMARK_SCOPE_ORDER: Record<string, number> = { category: 0, partition: 1, game: 2 };
+
+/** 比率 → 百分比。拿不到就显示「—」，绝不用 0 顶替。 */
+const fmtRate = (r?: number) => (r === undefined ? '—' : `${(r * 100).toFixed(2)}%`);
+
+/** 时间窗：null 表示榜单快照口径，不是一个固定时间窗 */
+const fmtWindow = (days: number | null) => (days === null ? '榜单快照' : `近 ${days} 天`);
+
 // ─── Main Page ─────────────────────────────────────────────
 
 export default function Analytics() {
@@ -146,11 +166,19 @@ export default function Analytics() {
   const [editingDouyin, setEditingDouyin] = useState(false);
   const [douyinForm, setDouyinForm] = useState({ followers: 0, avgViews: 0, totalVideos: 0, totalLikes: 0 });
   const [saving, setSaving] = useState(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'bilibili' | 'douyin'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'bilibili' | 'douyin' | 'calibration' | 'benchmark'>('overview');
+  const [benchmark, setBenchmark] = useState<BenchmarkSnapshot | null>(null);
+  const [benchmarkLoading, setBenchmarkLoading] = useState(false);
+  const { topics, loadTopics } = useTopicStore();
 
   useEffect(() => {
     loadData();
+    void loadBenchmark();
   }, []);
+
+  useEffect(() => {
+    loadTopics();
+  }, [loadTopics]);
 
   const loadData = async () => {
     try {
@@ -168,6 +196,18 @@ export default function Analytics() {
       });
     } catch (err) {
       console.error('Failed to load analytics:', err);
+    }
+  };
+
+  // 基准线。ready=false 时界面显示「暂无基准数据」，不显示任何占位数字。
+  const loadBenchmark = async (force = false) => {
+    setBenchmarkLoading(true);
+    try {
+      setBenchmark(force ? await api.refreshBenchmark() : await api.getBenchmark());
+    } catch (err) {
+      console.error('Failed to load benchmark:', err);
+    } finally {
+      setBenchmarkLoading(false);
     }
   };
 
@@ -230,6 +270,68 @@ export default function Analytics() {
       douyinAvgViews: recent.map(h => h.douyinAvgViews),
     };
   }, [history]);
+
+  // ─── 预测校准 ────────────────────────────────────────────
+  // 只统计「既有数字化预测、又有真实播放数据」的选题。
+  // 缺任何一边都不参与统计——不补 0、不猜、不插值。
+  //
+  // ★★ 这个 useMemo 必须放在下面的 `if (!account) return` 之前！★★
+  //    它只依赖 topics，与 account 无关。如果放到 early return 之后，
+  //    首次渲染（account 为 null）会比第二次渲染少调用一个 hook，React 抛
+  //    "Rendered more hooks than during the previous render."，整页白屏。
+  //    （2026-10-05 实际踩过这个坑，tsc 完全不报错。）
+  const calibration = useMemo(() => {
+    const published = topics.filter((t) => t.published);
+    const comparable = published
+      .filter((t) => t.estimatedViews > 0 && t.published?.views !== undefined)
+      .map((t) => {
+        const predicted = t.estimatedViews;
+        const actual = t.published?.views ?? 0;
+        return {
+          id: t.id,
+          title: t.title,
+          predicted,
+          actual,
+          absError: Math.abs(actual - predicted) / predicted,
+          url: t.published?.url,
+          publishedAt: t.published?.publishedAt ?? 0,
+        };
+      })
+      .sort((a, b) => b.absError - a.absError);
+
+    const skipped = published.filter(
+      (t) => !(t.estimatedViews > 0 && t.published?.views !== undefined),
+    );
+
+    const meanAbsError =
+      comparable.length > 0
+        ? comparable.reduce((sum, row) => sum + row.absError, 0) / comparable.length
+        : null;
+
+    // 中位数比值：>1 说明系统性低估，<1 说明系统性高估
+    let medianRatio: number | null = null;
+    if (comparable.length > 0) {
+      const ratios = comparable.map((r) => r.actual / r.predicted).sort((a, b) => a - b);
+      const mid = Math.floor(ratios.length / 2);
+      medianRatio =
+        ratios.length % 2 === 0
+          ? ((ratios[mid - 1] ?? 0) + (ratios[mid] ?? 0)) / 2
+          : (ratios[mid] ?? 0);
+    }
+
+    const overestimated = comparable.filter((row) => row.actual < row.predicted).length;
+    const underestimated = comparable.filter((row) => row.actual >= row.predicted).length;
+
+    return {
+      publishedCount: published.length,
+      comparable,
+      skipped,
+      meanAbsError,
+      medianRatio,
+      overestimated,
+      underestimated,
+    };
+  }, [topics]);
 
   if (!account) {
     return (
@@ -294,6 +396,8 @@ export default function Analytics() {
           { key: 'overview', label: '总览', icon: '📊' },
           { key: 'bilibili', label: 'B站', icon: '📺' },
           { key: 'douyin', label: '抖音', icon: '🎵' },
+          { key: 'calibration', label: '预测校准', icon: '🎯' },
+          { key: 'benchmark', label: '品类基准线', icon: '📐' },
         ] as const).map(tab => (
           <button
             key={tab.key}
@@ -556,6 +660,275 @@ export default function Analytics() {
               </div>
             )}
           </section>
+        </div>
+      )}
+
+      {/* ─── Calibration Tab ─── */}
+      {activeTab === 'calibration' && (
+        <div className="space-y-6">
+          <section className="bg-surface border border-border rounded-xl p-5">
+            <h2 className="text-sm font-bold text-text mb-1">预测 vs 实际</h2>
+            <p className="text-xs text-text-secondary mb-4">
+              只统计「既有数字化预测、又有真实播放数据」的选题。缺任何一边都不参与统计——
+              不补 0、不猜、不插值。实际数据由 B站接口取回。
+            </p>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <StatCard
+                label="已发布选题"
+                value={String(calibration.publishedCount)}
+                sublabel="有发布记录"
+                accent="#059669"
+              />
+              <StatCard
+                label="可对比样本"
+                value={String(calibration.comparable.length)}
+                sublabel="预测与实际都有"
+                accent="#7c3aed"
+              />
+              <StatCard
+                label="平均绝对偏差"
+                value={
+                  calibration.meanAbsError === null
+                    ? '—'
+                    : `${(calibration.meanAbsError * 100).toFixed(1)}%`
+                }
+                sublabel="越低越准"
+                accent="#dc2626"
+              />
+              <StatCard
+                label="实际/预测 中位数"
+                value={calibration.medianRatio === null ? '—' : `${calibration.medianRatio.toFixed(2)}×`}
+                sublabel="1.00 表示无系统性偏差"
+                accent="#d97706"
+              />
+            </div>
+            {calibration.comparable.length > 0 && (
+              <p className="text-xs text-text-secondary mt-4">
+                其中 高估 {calibration.overestimated} 条 · 低估 {calibration.underestimated} 条
+              </p>
+            )}
+          </section>
+
+          {calibration.comparable.length > 0 ? (
+            <section className="bg-surface border border-border rounded-xl p-5">
+              <h2 className="text-sm font-bold text-text mb-4">逐条对比（偏差从大到小）</h2>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-xs text-text-secondary border-b border-border">
+                      <th className="text-left py-2 pr-3 font-medium">选题</th>
+                      <th className="text-right py-2 px-2 font-medium">预测</th>
+                      <th className="text-right py-2 px-2 font-medium">实际</th>
+                      <th className="text-right py-2 px-2 font-medium">偏差</th>
+                      <th className="text-right py-2 pl-2 font-medium">发布日</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {calibration.comparable.map((row) => (
+                      <tr key={row.id} className="border-b border-border last:border-0">
+                        <td className="py-2.5 pr-3 max-w-[280px]">
+                          {row.url ? (
+                            <a
+                              href={row.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-primary hover:underline block truncate"
+                              title={row.title}
+                            >
+                              {row.title}
+                            </a>
+                          ) : (
+                            <span className="block truncate" title={row.title}>{row.title}</span>
+                          )}
+                        </td>
+                        <td className="text-right px-2 text-text-secondary whitespace-nowrap">
+                          {formatViews(row.predicted)}
+                        </td>
+                        <td className="text-right px-2 font-medium whitespace-nowrap">
+                          {formatViews(row.actual)}
+                        </td>
+                        <td
+                          className={`text-right px-2 font-medium whitespace-nowrap ${
+                            row.actual >= row.predicted ? 'text-emerald-700' : 'text-red-600'
+                          }`}
+                        >
+                          {formatDeviation(row.predicted, row.actual)}
+                        </td>
+                        <td className="text-right pl-2 text-xs text-text-secondary whitespace-nowrap">
+                          {row.publishedAt ? new Date(row.publishedAt).toLocaleDateString('zh-CN') : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          ) : (
+            <section className="bg-surface border border-border rounded-xl p-8 text-center">
+              <div className="text-3xl mb-3">🎯</div>
+              <p className="text-sm text-text-secondary">
+                还没有可对比的样本。去「选题看板」给选题做一次 AI 评估（会记下预测值），
+                发布之后点「记录发布」粘贴视频链接，这里就会自动出现对比。
+              </p>
+            </section>
+          )}
+
+          {calibration.skipped.length > 0 && (
+            <section className="bg-surface border border-border rounded-xl p-5">
+              <h2 className="text-sm font-bold text-text mb-1">
+                未参与统计（{calibration.skipped.length} 条）
+              </h2>
+              <p className="text-xs text-text-secondary mb-3">
+                这些选题已有发布记录，但缺少预测值或实际播放数据，因此不计入上面的偏差统计。
+              </p>
+              <ul className="space-y-1.5 text-sm">
+                {calibration.skipped.map((t) => (
+                  <li key={t.id} className="flex items-center gap-3 text-text-secondary">
+                    <span className="flex-1 truncate" title={t.title}>{t.title}</span>
+                    <span className="text-xs shrink-0 text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">
+                      {t.estimatedViews > 0 ? '缺实际数据' : '缺预测值'}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+        </div>
+      )}
+
+      {/* ─── Benchmark Tab ─── */}
+      {activeTab === 'benchmark' && (
+        <div className="space-y-6">
+          <section className="bg-surface border border-border rounded-xl p-5">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-sm font-bold text-text mb-1">B站基准线</h2>
+                <p className="text-xs text-text-secondary">
+                  这里的每个数字都来自 B站接口的真实样本，不含估算与占位。
+                  样本量不足的品类不会给出基准线，而是列在下方「样本不足」中。
+                </p>
+              </div>
+              <button
+                onClick={() => void loadBenchmark(true)}
+                disabled={benchmarkLoading}
+                className="shrink-0 px-3 py-1.5 border border-border rounded-lg text-xs text-text-secondary hover:bg-gray-50 transition-colors disabled:opacity-50"
+              >
+                {benchmarkLoading ? '采集中…' : '重新采集'}
+              </button>
+            </div>
+            {benchmark?.collectedAt && (
+              <p className="text-xs text-text-secondary mt-3">
+                采集于 {new Date(benchmark.collectedAt).toLocaleString('zh-CN')}
+                {benchmark.error ? ` · 上次刷新失败：${benchmark.error}` : ''}
+              </p>
+            )}
+          </section>
+
+          {benchmark && benchmark.ready ? (
+            <>
+              <section className="bg-surface border border-border rounded-xl p-5">
+                <h2 className="text-sm font-bold text-text mb-1">采样口径</h2>
+                <p className="text-xs text-text-secondary mb-4">
+                  <span className="font-medium text-text">榜单口径</span>：B站热门榜（全站）中属于游戏子分区的条目 ——
+                  这是「头部样本」，不是全量分布。
+                  <span className="font-medium text-text"> 品类口径</span>：B站搜索「近 30 天 · 按播放量排序」——
+                  代表该品类当前水位。
+                </p>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-xs text-text-secondary border-b border-border">
+                        <th className="text-left py-2 pr-3 font-medium">口径</th>
+                        <th className="text-left py-2 pr-3 font-medium">样本</th>
+                        <th className="text-right py-2 px-2 font-medium">样本量</th>
+                        <th className="text-left py-2 px-3 font-medium">时间窗</th>
+                        <th className="text-right py-2 px-2 font-medium">播放 P25</th>
+                        <th className="text-right py-2 px-2 font-medium">播放中位</th>
+                        <th className="text-right py-2 px-2 font-medium">播放 P90</th>
+                        <th className="text-right py-2 px-2 font-medium">点赞率</th>
+                        <th className="text-right py-2 pl-2 font-medium">收藏率</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[...benchmark.samples]
+                        .sort(
+                          (a, b) =>
+                            (BENCHMARK_SCOPE_ORDER[a.scope] ?? 9) - (BENCHMARK_SCOPE_ORDER[b.scope] ?? 9) ||
+                            b.sampleSize - a.sampleSize,
+                        )
+                        .map((s) => (
+                          <tr key={`${s.scope}:${s.key}`} className="border-b border-border last:border-0">
+                            <td className="py-2 pr-3 text-xs text-text-secondary whitespace-nowrap">
+                              {BENCHMARK_SCOPE_LABEL[s.scope] ?? s.scope}
+                            </td>
+                            <td className="py-2 pr-3 whitespace-nowrap" title={s.sourceLabel}>
+                              {s.label}
+                            </td>
+                            <td className="py-2 px-2 text-right whitespace-nowrap">
+                              {s.sampleSize}
+                              <span className="text-xs text-text-secondary"> 条</span>
+                            </td>
+                            <td className="py-2 px-3 text-xs text-text-secondary whitespace-nowrap">
+                              {fmtWindow(s.windowDays)}
+                            </td>
+                            <td className="py-2 px-2 text-right text-text-secondary whitespace-nowrap">
+                              {formatViews(s.views.p25)}
+                            </td>
+                            <td className="py-2 px-2 text-right font-medium whitespace-nowrap">
+                              {formatViews(s.views.median)}
+                            </td>
+                            <td className="py-2 px-2 text-right text-text-secondary whitespace-nowrap">
+                              {formatViews(s.views.p90)}
+                            </td>
+                            <td className="py-2 px-2 text-right whitespace-nowrap">
+                              {fmtRate(s.rates.like?.median)}
+                            </td>
+                            <td className="py-2 pl-2 text-right whitespace-nowrap">
+                              {fmtRate(s.rates.favorite?.median)}
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+                {benchmark.samples.some((s) => s.unavailable.length > 0) && (
+                  <p className="text-xs text-amber-700 mt-3">
+                    数据源明确不提供的指标留空（显示「—」），不以 0 或估计值顶替：
+                    {Array.from(new Set(benchmark.samples.flatMap((s) => s.unavailable))).join('；')}
+                  </p>
+                )}
+              </section>
+
+              {benchmark.gaps.length > 0 && (
+                <section className="bg-surface border border-border rounded-xl p-5">
+                  <h2 className="text-sm font-bold text-text mb-1">
+                    样本不足（{benchmark.gaps.length} 项）
+                  </h2>
+                  <p className="text-xs text-text-secondary mb-3">
+                    样本量没到门槛就不构成基准线，因此这些品类不显示任何数字。
+                  </p>
+                  <ul className="flex flex-wrap gap-2 text-xs">
+                    {benchmark.gaps.map((g) => (
+                      <li
+                        key={g.key}
+                        className="px-2.5 py-1 rounded-full bg-amber-50 text-amber-800 border border-amber-200"
+                      >
+                        {g.label}：采到 {g.sampleSize} 条，需要 {g.needed} 条
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+            </>
+          ) : (
+            <section className="bg-surface border border-border rounded-xl p-8 text-center">
+              <div className="text-3xl mb-3">📉</div>
+              <p className="text-sm text-text-secondary">
+                暂无基准数据。后端首次采集约需 30 秒，稍后点「重新采集」即可。
+                {benchmark?.error ? ` 上次失败原因：${benchmark.error}` : ''}
+              </p>
+            </section>
+          )}
         </div>
       )}
     </div>

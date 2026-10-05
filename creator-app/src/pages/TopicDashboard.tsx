@@ -3,7 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { useTopicStore } from '../store/topicStore';
 import { useScriptStore } from '../store/scriptStore';
 import { api } from '../api/client';
-import type { Topic, GameCategory, TopicStatus, TopicEvaluation } from '../types';
+import type { Topic, GameCategory, TopicStatus, TopicEvaluation, PublishedRecord } from '../types';
+import type { VideoStat } from '../api/client';
+import { formatDeviation, formatDuration, formatViews, parseEstimatedViews } from '../utils/prediction';
 import { CATEGORIES, DEFAULT_CATEGORY, categoryBadge, categoryEmoji, categoryLabel, getCategory } from '../config/categories';
 
 const STATUS_LABELS: Record<TopicStatus, string> = {
@@ -12,6 +14,7 @@ const STATUS_LABELS: Record<TopicStatus, string> = {
   approved: '已通过',
   scripting: '写脚本',
   done: '已完成',
+  published: '已发布',
 };
 
 const STATUS_COLORS: Record<TopicStatus, string> = {
@@ -20,6 +23,7 @@ const STATUS_COLORS: Record<TopicStatus, string> = {
   approved: 'bg-green-50 text-green-700',
   scripting: 'bg-amber-50 text-amber-700',
   done: 'bg-purple-50 text-purple-700',
+  published: 'bg-emerald-50 text-emerald-700',
 };
 
 const URGENCY_LABELS: Record<string, string> = {
@@ -49,6 +53,12 @@ export default function TopicDashboard() {
   const [evaluation, setEvaluation] = useState<TopicEvaluation | null>(null);
   const [evalTopicId, setEvalTopicId] = useState<string | null>(null);
   const [evalError, setEvalError] = useState('');
+  // 「记录发布」弹窗状态
+  const [publishTopicId, setPublishTopicId] = useState<string | null>(null);
+  const [publishUrl, setPublishUrl] = useState('');
+  const [publishStat, setPublishStat] = useState<VideoStat | null>(null);
+  const [publishError, setPublishError] = useState('');
+  const [publishing, setPublishing] = useState(false);
 
   useEffect(() => {
     loadTopics();
@@ -105,8 +115,14 @@ export default function TopicDashboard() {
       });
       const evalWithTime: TopicEvaluation = { ...result, evaluatedAt: Date.now() };
       setEvaluation(evalWithTime);
-      // Persist evaluation to IndexedDB
-      await updateTopic(topic.id, { evaluation: evalWithTime });
+      // Persist evaluation to IndexedDB。
+      // ★ 同时把 AI 给出的「预估播放量」文本解析成数字存进 estimatedViews，
+      //   这样日后才能拿它和真实播放量做对比。解析不出来就保持原值，绝不写 0。
+      const parsedPrediction = parseEstimatedViews(result.estimatedViews);
+      await updateTopic(topic.id, {
+        evaluation: evalWithTime,
+        ...(parsedPrediction !== null ? { estimatedViews: parsedPrediction } : {}),
+      });
     } catch (err) {
       setEvalError((err as Error).message);
     } finally {
@@ -119,6 +135,70 @@ export default function TopicDashboard() {
     setEvalTopicId(null);
     setEvalError('');
   };
+
+  // ─── 记录发布 ───────────────────────────────────────────
+  // 设计取向：不猜、不匹配、不估算。用户贴链接，后端向 B站 view 接口取精确数据。
+  // 取不到就明确报错，绝不用 0 或占位数字糊过去。
+  const openPublish = (topic: Topic) => {
+    setPublishTopicId(topic.id);
+    setPublishUrl(topic.published?.url || topic.published?.bvid || '');
+    setPublishStat(null);
+    setPublishError('');
+  };
+
+  const closePublish = () => {
+    setPublishTopicId(null);
+    setPublishUrl('');
+    setPublishStat(null);
+    setPublishError('');
+  };
+
+  const handleFetchStat = async () => {
+    const input = publishUrl.trim();
+    if (!input) return;
+    setPublishing(true);
+    setPublishError('');
+    setPublishStat(null);
+    try {
+      const resp = await api.getVideoStat(input);
+      if (resp.ok && resp.stat) {
+        setPublishStat(resp.stat);
+      } else {
+        setPublishError(resp.error || '取数失败');
+      }
+    } catch (err) {
+      setPublishError((err as Error).message);
+    } finally {
+      setPublishing(false);
+    }
+  };
+
+  const handleConfirmPublish = async () => {
+    if (!publishTopicId || !publishStat) return;
+    const record: PublishedRecord = {
+      platform: 'bilibili',
+      bvid: publishStat.bvid,
+      url: publishStat.url,
+      title: publishStat.title,
+      publishedAt: publishStat.publishedAt,
+      duration: publishStat.duration,
+      views: publishStat.views,
+      likes: publishStat.likes,
+      coins: publishStat.coins,
+      favorites: publishStat.favorites,
+      shares: publishStat.shares,
+      comments: publishStat.comments,
+      danmaku: publishStat.danmaku,
+      fetchedAt: publishStat.fetchedAt,
+      source: 'auto',
+    };
+    await updateTopic(publishTopicId, { published: record, status: 'published' });
+    closePublish();
+  };
+
+  const publishTarget = topics.find((t) => t.id === publishTopicId);
+  const publishPredicted =
+    publishTarget && publishTarget.estimatedViews > 0 ? publishTarget.estimatedViews : undefined;
 
   return (
     <div>
@@ -339,6 +419,18 @@ export default function TopicDashboard() {
                     <span>难度 {DIFFICULTY_STARS[topic.difficulty]}</span>
                     <span>{new Date(topic.createdAt).toLocaleDateString('zh-CN')}</span>
                   </div>
+                  {topic.published && (
+                    <div className="flex items-center gap-2 mt-2 text-xs flex-wrap">
+                      <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-medium">
+                        实际播放 {formatViews(topic.published.views)}
+                      </span>
+                      <span className="text-text-secondary">
+                        {topic.estimatedViews > 0
+                          ? `预测 ${formatViews(topic.estimatedViews)} · 偏差 ${formatDeviation(topic.estimatedViews, topic.published.views)}`
+                          : '没有数字化的预测值，无法计算偏差'}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-1 shrink-0">
@@ -368,6 +460,12 @@ export default function TopicDashboard() {
                     className="px-3 py-1.5 text-xs font-medium text-white bg-primary rounded-lg hover:bg-primary-dark transition-colors"
                   >
                     开始写脚本
+                  </button>
+                  <button
+                    onClick={() => openPublish(topic)}
+                    className="px-3 py-1.5 text-xs font-medium text-emerald-700 border border-emerald-200 rounded-lg hover:bg-emerald-50 transition-colors"
+                  >
+                    {topic.published ? '更新数据' : '记录发布'}
                   </button>
                   <button
                     onClick={() => {
@@ -443,6 +541,27 @@ export default function TopicDashboard() {
                     <span className="text-text-secondary">{evaluation.estimatedViews}</span>
                   </div>
 
+                  {/* ★ 数据诚实原则：必须让用户分清这个数字是「有样本算出来的」还是「模型猜的」 */}
+                  {evaluation.basis &&
+                    (evaluation.basis.source === 'benchmark' ? (
+                      <div className="text-xs rounded-lg px-3 py-2 bg-emerald-50 border border-emerald-200 text-emerald-800">
+                        数据依据：{evaluation.basis.label ?? '同品类'}真实样本
+                        {evaluation.basis.sampleSize != null && `（${evaluation.basis.sampleSize} 条`}
+                        {evaluation.basis.windowDays != null
+                          ? `，近 ${evaluation.basis.windowDays} 天）`
+                          : '，榜单快照）'}
+                        {evaluation.basis.percentile != null &&
+                          (evaluation.basis.percentile <= 0
+                            ? '· 该预估低于样本最低值'
+                            : evaluation.basis.percentile >= 100
+                              ? '· 该预估高于样本最高值'
+                              : `· 该预估约处于 P${evaluation.basis.percentile} 水位`)}
+                      </div>
+                    ) : (
+                      <div className="text-xs rounded-lg px-3 py-2 bg-amber-50 border border-amber-200 text-amber-800">
+                        暂无该品类的真实基准数据，本条预估为 AI 推断，未经数据校验
+                      </div>
+                    ))}
                   <div>
                     <span className="font-medium text-text">推荐平台: </span>
                     <span className="text-text-secondary">{evaluation.bestPlatform}</span>
@@ -491,6 +610,87 @@ export default function TopicDashboard() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+      {/* 记录发布弹窗 */}
+      {publishTopicId && (
+        <div className="fixed inset-0 bg-black/30 z-20 flex items-center justify-center p-4" onClick={closePublish}>
+          <div
+            className="bg-surface rounded-xl p-6 w-full max-w-lg max-h-[80vh] overflow-y-auto shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-1">
+              <h2 className="text-lg font-bold">记录发布结果</h2>
+              <button onClick={closePublish} className="text-text-secondary hover:text-text text-sm">关闭</button>
+            </div>
+            <p className="text-xs text-text-secondary mb-4">
+              粘贴 B站视频链接，直接取回真实播放 / 点赞 / 投币数据。数据来自 B站接口，不做任何估算。
+            </p>
+
+            <div className="flex gap-2">
+              <input
+                value={publishUrl}
+                onChange={(e) => setPublishUrl(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleFetchStat();
+                }}
+                placeholder="https://www.bilibili.com/video/BV..."
+                className="flex-1 px-3 py-2 border border-border rounded-lg text-sm bg-surface focus:outline-none focus:border-primary"
+              />
+              <button
+                onClick={handleFetchStat}
+                disabled={publishing || !publishUrl.trim()}
+                className="px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium disabled:opacity-50"
+              >
+                {publishing ? '取数中...' : '取数'}
+              </button>
+            </div>
+
+            {publishError && (
+              <p className="mt-3 text-sm text-red-600 bg-red-50 rounded-lg p-3">{publishError}</p>
+            )}
+
+            {publishStat && (
+              <div className="mt-4 border border-border rounded-lg p-4">
+                <p className="text-sm font-medium mb-1 break-all">{publishStat.title}</p>
+                <p className="text-xs text-text-secondary mb-3">
+                  {publishStat.bvid} · 时长 {formatDuration(publishStat.duration)} · 发布于{' '}
+                  {new Date(publishStat.publishedAt).toLocaleDateString('zh-CN')}
+                </p>
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  {[
+                    { label: '播放', value: publishStat.views },
+                    { label: '点赞', value: publishStat.likes },
+                    { label: '投币', value: publishStat.coins },
+                    { label: '收藏', value: publishStat.favorites },
+                    { label: '分享', value: publishStat.shares },
+                    { label: '评论', value: publishStat.comments },
+                  ].map((item) => (
+                    <div key={item.label} className="bg-gray-50 rounded-lg py-2">
+                      <div className="text-sm font-semibold">{formatViews(item.value)}</div>
+                      <div className="text-xs text-text-secondary">{item.label}</div>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-text-secondary mt-3">
+                  {publishPredicted === undefined
+                    ? '该选题还没有数字化的预测播放量，本次只记录实际结果，不计算偏差。'
+                    : `预测 ${formatViews(publishPredicted)} · 实际 ${formatViews(publishStat.views)} · 偏差 ${formatDeviation(publishPredicted, publishStat.views)}`}
+                </p>
+              </div>
+            )}
+
+            <div className="flex gap-2 justify-end mt-5">
+              <button onClick={closePublish} className="px-4 py-2 text-sm text-text-secondary">取消</button>
+              <button
+                onClick={handleConfirmPublish}
+                disabled={!publishStat}
+                className="px-4 py-2 text-sm font-medium text-white bg-primary rounded-lg disabled:opacity-50"
+              >
+                保存发布记录
+              </button>
+            </div>
           </div>
         </div>
       )}

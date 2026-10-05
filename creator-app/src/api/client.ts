@@ -1,3 +1,5 @@
+import type { BenchmarkSnapshot } from '../types';
+
 const API_BASE = '/api';
 
 /** 带 HTTP 状态码与后端业务错误码的错误，便于调用方按 code 分支处理 */
@@ -93,6 +95,33 @@ export interface SyncResult {
   syncedFields: string[];
   failedFields: string[];
   accountInfo: AccountInfo;
+}
+
+/**
+ * B站单条视频真实数据（由后端 /api/video/stat 从 B站 view 接口归一化而来）。
+ * 每个字段都直接来自接口，没有推断值。
+ */
+export interface VideoStat {
+  bvid: string;
+  title: string;
+  url: string;
+  publishedAt: number;
+  duration: number;
+  views: number;
+  likes: number;
+  coins: number;
+  favorites: number;
+  shares: number;
+  comments: number;
+  danmaku: number;
+  fetchedAt: number;
+}
+
+export interface VideoStatResponse {
+  ok: boolean;
+  stat?: VideoStat;
+  error?: string;
+  code?: 'BAD_INPUT' | 'NOT_FOUND' | 'RISK_CONTROL' | 'UPSTREAM' | 'NETWORK' | 'SERVER_ERROR';
 }
 
 export interface TopicEvaluation {
@@ -249,4 +278,16 @@ export const api = {
 
   getSyncStatus: () =>
     request<{ syncConfigured: boolean }>('/sync/status'),
+
+  // B站单条视频真实数据：粘贴链接 → 精确取数（用于「记录发布」）
+  // ★ 注意：ok=false 时后端依旧返回 200，用 code 区分 BAD_INPUT / NOT_FOUND / RISK_CONTROL / NETWORK。
+  //   调用方必须处理 ok=false，不能把「取不到」当成「播放量为 0」。
+  getVideoStat: (url: string) =>
+    request<VideoStatResponse>(`/video/stat?url=${encodeURIComponent(url)}`),
+
+  // B站品类基准线
+  // ★ ready=false 表示还没采到样本（冷启动 / 采集失败），界面上必须显示「暂无基准数据」，
+  //   绝不能用 0 或占位数字顶替。
+  getBenchmark: () => request<BenchmarkSnapshot>('/benchmark'),
+  refreshBenchmark: () => request<BenchmarkSnapshot>('/benchmark/refresh', { method: 'POST' }),
 };

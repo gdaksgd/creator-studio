@@ -9,6 +9,9 @@ import { rateLimit, dailyQuota } from './middleware/rateLimit.js';
 import newsRoutes from './routes/news.js';
 import aiRoutes from './routes/ai.js';
 import syncRoutes from './routes/sync.js';
+import videoRoutes from './routes/video.js';
+import benchmarkRoutes from './routes/benchmark.js';
+import { refreshAll as refreshBenchmarks } from './services/benchmarkService.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -50,6 +53,9 @@ app.get('/api/health', (req, res) => {
 const aiRateLimiter = rateLimit({ windowMs: 60 * 1000, max: 20 }); // /api/ai/*：每分钟 20 次
 const collectRateLimiter = rateLimit({ windowMs: 10 * 60 * 1000, max: 3 }); // /api/news/collect：每 10 分钟 3 次
 const looseRateLimiter = rateLimit({ windowMs: 60 * 1000, max: 120 }); // 其它 /api/*：每分钟 120 次
+const videoRateLimiter = rateLimit({ windowMs: 60 * 1000, max: 30 }); // /api/video/*：每分钟 30 次（会外呼 B站）
+const benchmarkRateLimiter = rateLimit({ windowMs: 60 * 1000, max: 30 }); // /api/benchmark：读缓存，很轻
+const benchmarkRefreshLimiter = rateLimit({ windowMs: 10 * 60 * 1000, max: 3 }); // 强制重采：每次会外呼 B站 18 次
 const aiDailyQuota = dailyQuota({ limit: config.aiDailyLimit }); // AI 每日总配额，默认 300
 
 app.use('/api/ai', aiRateLimiter, (req, res, next) => {
@@ -64,10 +70,21 @@ app.use('/api/ai', aiRateLimiter, (req, res, next) => {
 
 app.use('/api/news/collect', collectRateLimiter);
 
+app.use('/api/video', videoRateLimiter);
+
+// 强制重采要单独限流（比读接口严格得多），必须注册在 /api/benchmark 之前
+app.use('/api/benchmark/refresh', benchmarkRefreshLimiter);
+app.use('/api/benchmark', benchmarkRateLimiter);
+
 app.use('/api', (req, res, next) => {
   // 上面已经严格限流的路径不再重复计数
   const apiPath = req.originalUrl.split('?')[0];
-  if (apiPath.startsWith('/api/ai') || apiPath === '/api/news/collect') {
+  if (
+    apiPath.startsWith('/api/ai') ||
+    apiPath === '/api/news/collect' ||
+    apiPath.startsWith('/api/video') ||
+    apiPath.startsWith('/api/benchmark')
+  ) {
     next();
     return;
   }
@@ -78,6 +95,8 @@ app.use('/api', (req, res, next) => {
 app.use('/api/news', newsRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/sync', syncRoutes);
+app.use('/api/video', videoRoutes);
+app.use('/api/benchmark', benchmarkRoutes);
 
 // 未匹配的 /api/* 一律返回 404 JSON（不能落到 SPA fallback 返回 HTML）
 app.use('/api', (req, res) => {
@@ -113,6 +132,10 @@ app.listen(config.port, () => {
 
   // Start scheduled collection
   startScheduler();
+
+  // 预热基准线缓存：首次部署需要约 30 秒（10 页热门榜 + 8 个品类搜索），
+  // 放在后台跑，不阻塞启动；失败只影响基准线，其它功能照常。
+  void refreshBenchmarks();
 
   // Initial collection on startup (delayed)
   setTimeout(() => {

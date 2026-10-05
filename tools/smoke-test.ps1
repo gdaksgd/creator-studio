@@ -12,7 +12,8 @@
       6. sync status endpoint    (/api/sync/status)
       7. bundle is served        (hashed JS asset referenced by index.html)
       8. password is gone        (bundle must not contain the old secret)
-      9. public URL (optional)   (same checks through the tunnel)
+      9. video stat endpoint     (/api/video/stat returns real data, own throttle)
+     10. public URL (optional)   (same checks through the tunnel)
 
     Usage:
         powershell -NoProfile -ExecutionPolicy Bypass -File tools\smoke-test.ps1
@@ -107,6 +108,79 @@ function Test-Site {
     } else {
         Write-Check 'bundle asset referenced' $false 'no /assets/index-*.js in index.html'
     }
+
+    # ---- M1: publish-result backfill (/api/video/stat) -------------------
+    # Hits the real Bilibili view endpoint, so this also proves the outbound path
+    # works from the deployed backend.
+    $vs = Invoke-Probe "$Root/api/video/stat?url=BV16io9YTEqH"
+    $vsOk = $false
+    $vsViews = 0
+    if ($vs.Body) {
+        try {
+            $vsJson = $vs.Body | ConvertFrom-Json
+            $vsOk = [bool] $vsJson.ok
+            if ($vsJson.stat) { $vsViews = [int] $vsJson.stat.views }
+        } catch { }
+    }
+    Write-Check 'video stat returns real data' `
+                (($vs.Status -eq 200) -and $vsOk -and ($vsViews -gt 0)) `
+                "HTTP $($vs.Status), views=$vsViews"
+
+    $vsBad = Invoke-Probe "$Root/api/video/stat?url=not-a-video-link"
+    Write-Check 'video stat rejects junk input' ($vsBad.Body -match '"code"\s*:\s*"BAD_INPUT"') `
+                'code=BAD_INPUT'
+
+    $vsGone = Invoke-Probe "$Root/api/video/stat?url=BV0000000000"
+    Write-Check 'video stat reports missing video' ($vsGone.Body -match '"code"\s*:\s*"NOT_FOUND"') `
+                'code=NOT_FOUND'
+
+    $vsNoArg = Invoke-Probe "$Root/api/video/stat"
+    Write-Check 'video stat requires url' ($vsNoArg.Status -eq 400) `
+                "HTTP $($vsNoArg.Status)"
+
+    $vsHdr = Invoke-Probe "$Root/api/video/stat?url=BV16io9YTEqH" -WithHeaders
+    Write-Check 'video route has own throttle' ($vsHdr.Headers -match 'X-RateLimit-Limit:\s*30') `
+                'X-RateLimit-Limit: 30'
+
+    # ---- M2: category benchmark lines (/api/benchmark) ------------------
+    # Guards the data-honesty rule: every published number must come from real
+    # samples, so a shipped sample may never carry sampleSize 0.
+    $bmReady = Invoke-Probe "$Root/api/benchmark/ready"
+    $bmReadyOk = $false
+    $bmSamples = @()
+    if ($bmReady.Body) {
+        try {
+            $bmJson = $bmReady.Body | ConvertFrom-Json
+            $bmReadyOk = [bool] $bmJson.ready
+            if ($bmJson.samples) { $bmSamples = @($bmJson.samples) }
+        } catch { }
+    }
+    Write-Check 'benchmark ready endpoint served' `
+                (($bmReady.Status -eq 200) -and $bmReadyOk -and ($bmSamples.Count -gt 0)) `
+                "HTTP $($bmReady.Status), ready=$bmReadyOk, samples=$($bmSamples.Count)"
+
+    $bmShapeOk = $false
+    if ($bmReady.Status -eq 200) {
+        $bmPlain = Invoke-Probe "$Root/api/benchmark"
+        $bmShapeOk = ($bmPlain.Status -eq 200) -and ($bmPlain.Body -match '"samples"')
+    }
+    Write-Check 'benchmark snapshot readable' $bmShapeOk 'GET /api/benchmark has samples'
+
+    $badSample = @($bmSamples | Where-Object { $_.sampleSize -le 0 -or -not $_.sourceLabel -or -not $_.views })
+    Write-Check 'benchmark never ships an empty sample' ($badSample.Count -eq 0) `
+                "empty samples: $($badSample.Count)"
+
+    $noWindow = @($bmSamples | Where-Object { $_.PSObject.Properties.Name -notcontains 'windowDays' })
+    Write-Check 'benchmark sample carries size + window' ($noWindow.Count -eq 0) `
+                "samples missing windowDays: $($noWindow.Count)"
+
+    $thinCategory = @($bmSamples | Where-Object { $_.scope -eq 'category' -and $_.sampleSize -lt 15 })
+    Write-Check 'benchmark category lines above threshold' ($thinCategory.Count -eq 0) `
+                "thin category samples: $($thinCategory.Count)"
+
+    $bmHdr = Invoke-Probe "$Root/api/benchmark" -WithHeaders
+    Write-Check 'benchmark route has own throttle' ($bmHdr.Headers -match 'X-RateLimit-Limit:\s*30') `
+                'X-RateLimit-Limit: 30'
 }
 
 Write-Host ''
