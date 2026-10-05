@@ -74,6 +74,8 @@ export interface TopicEvaluation {
   risks: string;
   bestPlatform: string;
   bestTime: string;
+  /** 这次判断的依据来源。缺失表示 AI 在没有基准数据的情况下作答。 */
+  basis?: BenchmarkBasis;
 }
 
 export interface IdeaEvaluation {
@@ -171,4 +173,90 @@ export interface VideoStat {
   danmaku: number;
   /** 本次取数时间（毫秒），用于判断数据新鲜度 */
   fetchedAt: number;
+}
+
+// ===== 品类 / 分区基准线（M2） =====
+
+/**
+ * 一个分布带。★ 全部由真实样本算出，没有任何插值或占位。
+ * 样本量不足时上层根本不会生成 BenchmarkSample，而不是造一个 0 出来。
+ */
+export interface MetricBand {
+  min: number;
+  p25: number;
+  median: number;
+  p75: number;
+  p90: number;
+  max: number;
+}
+
+/** 比率带，数值为 0-1 的比率（如点赞率 = 点赞/播放） */
+export interface RateBand {
+  p25: number;
+  median: number;
+  p75: number;
+}
+
+export type BenchmarkScope = 'category' | 'partition' | 'game';
+
+export interface BenchmarkSample {
+  scope: BenchmarkScope;
+  /** 作用域标识：品类 id（如 horror）或 B站子分区名（如 单机游戏） */
+  key: string;
+  label: string;
+  sampleSize: number;
+  /** 机器可读的来源标识 */
+  source: 'bilibili-popular' | 'bilibili-search';
+  /** 展示给用户的来源说明 */
+  sourceLabel: string;
+  /** 时间窗（天）。null = 榜单快照口径，不是一个时间窗 */
+  windowDays: number | null;
+  collectedAt: number;
+  views: MetricBand;
+  durations: MetricBand;
+  /** 某个指标该来源不提供时，键直接不存在（不是 0） */
+  rates: {
+    like?: RateBand;
+    coin?: RateBand;
+    favorite?: RateBand;
+    share?: RateBand;
+    danmaku?: RateBand;
+    comment?: RateBand;
+  };
+  /** 明确列出该样本算不出来的指标及原因，供界面原样展示 */
+  unavailable: string[];
+  /** 升序排列的全部播放量，用于计算某条视频所处的分位 */
+  viewDistribution: number[];
+}
+
+/** AI 评估结论的依据声明 */
+export interface BenchmarkBasis {
+  /** benchmark = 有真实样本支撑；ai = 无样本，纯模型判断 */
+  source: 'benchmark' | 'ai';
+  scope?: BenchmarkScope;
+  key?: string;
+  label?: string;
+  sampleSize?: number;
+  windowDays?: number | null;
+  /** 该选题预估播放量在样本中的分位（0-100），算不出时不存在 */
+  percentile?: number;
+}
+
+/** 样本不足的记录，用于向前端解释「为什么这个品类没有基准线」 */
+export interface BenchmarkGap {
+  key: string;
+  label: string;
+  sampleSize: number;
+  needed: number;
+}
+
+/** 基准线快照的接口响应 */
+export interface BenchmarkSnapshot {
+  ready: boolean;
+  collecting: boolean;
+  collectedAt: number | null;
+  /** 采集失败时的原因（有旧缓存时仍返回旧数据） */
+  error?: string;
+  samples: BenchmarkSample[];
+  gaps: BenchmarkGap[];
 }
