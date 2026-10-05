@@ -5,6 +5,7 @@ import { useTopicStore } from '../store/topicStore';
 import { api, type ScriptSuggestion } from '../api/client';
 import type { Platform, Storyboard, IdeaEvaluation, TitleEvaluation } from '../types';
 import { categoryLabel } from '../config/categories';
+import PlatformCheckPanel from '../components/PlatformCheckPanel';
 
 const PLATFORM_LABELS: Record<Platform, string> = {
   bilibili: 'B站',
@@ -416,6 +417,13 @@ export default function ScriptEditor() {
                   />
                 </label>
               </div>
+
+              {/* M4：平台适配检查（纯规则引擎；同一份脚本在 B站/抖音 的结论不同） */}
+              <PlatformCheckPanel
+                platform={selectedScript.platform}
+                title={selectedScript.title}
+                durationSec={totalDuration}
+              />
 
               <div className="bg-surface border border-border rounded-xl p-4">
                 <div className="flex items-center justify-between mb-3">

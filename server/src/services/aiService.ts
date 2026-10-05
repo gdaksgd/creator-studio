@@ -342,6 +342,85 @@ ${scriptContent}
   }
 }
 
+/** M4 · AI 润色封面/标题时的输入（规则结论由 platformRules.ts 先算出来，AI 只负责写文案） */
+export interface CoverPolishInput {
+  platform: string;
+  title: string;
+  coverText: string;
+  /** 规则引擎给出的结论（含出处说明），AI 必须把它们当作硬约束 */
+  ruleFindings: string[];
+  durationAdvice: string;
+}
+
+export interface CoverPolishResult {
+  /** 候选封面文案（每条不超过 8 个字） */
+  coverCandidates: string[];
+  /** 候选标题（保留信息量，不堆情绪词） */
+  titleCandidates: string[];
+  rationale: string;
+  model: string;
+}
+
+/**
+ * M4 · 用 AI 润色封面文案与标题。
+ *
+ * 注意：这不是「判断题」，判断已经由 platformRules.ts 的纯规则引擎做完了。
+ * 这里只做文案生成，且提示词里明确写了「不要编造数据、不要用标题党词」。
+ */
+export async function polishCoverCopy(input: CoverPolishInput): Promise<CoverPolishResult> {
+  if (!isAIConfigured()) {
+    throw new Error('AI 未配置，请在 .env 中设置 DEEPSEEK_API_KEY');
+  }
+
+  const platformDesc = input.platform === 'bilibili' ? 'B站（3-10分钟中长视频，计播放分钟数）' : '抖音（1-3分钟，计完播率）';
+
+  const prompt = `你是B站/抖音游戏区的封面与标题文案写手。判断标准已经由规则引擎给出，你只负责写文案。
+
+## 当前信息
+平台: ${platformDesc}
+视频标题: ${input.title || '（未填）'}
+封面文案: ${input.coverText || '（未填）'}
+时长建议: ${input.durationAdvice}
+
+## 规则引擎的结论（必须当作硬约束）
+${input.ruleFindings.length ? input.ruleFindings.map((f, i) => `${i + 1}. ${f}`).join('\n') : '（无）'}
+
+## 要求
+- 封面文案：3 条候选，每条不超过 8 个字，可以有情绪但要具体（例如具体处境/具体结果），不要用「震惊」「速看」「99%的人」这类标题党词。
+- 标题：3 条候选，保留信息量与疑问句结构，不要把情绪词堆在标题里。
+- 不要编造任何数据、播放量、排名、奖项。
+- 只输出 JSON，不要任何其他文字：
+
+{
+  "coverCandidates": ["候选1", "候选2", "候选3"],
+  "titleCandidates": ["候选1", "候选2", "候选3"],
+  "rationale": "一句话说明你怎么取舍"
+}`;
+
+  const client = getClient();
+  const response = await client.chat.completions.create({
+    model: 'deepseek-chat',
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.8,
+    max_tokens: 800,
+  });
+
+  const content = response.choices[0]?.message?.content || '';
+  const jsonStr = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+
+  try {
+    const parsed = JSON.parse(jsonStr);
+    return {
+      coverCandidates: Array.isArray(parsed.coverCandidates) ? parsed.coverCandidates.slice(0, 5) : [],
+      titleCandidates: Array.isArray(parsed.titleCandidates) ? parsed.titleCandidates.slice(0, 5) : [],
+      rationale: typeof parsed.rationale === 'string' ? parsed.rationale : '',
+      model: 'deepseek-chat',
+    };
+  } catch {
+    return { coverCandidates: [], titleCandidates: [], rationale: content, model: 'deepseek-chat' };
+  }
+}
+
 /**
  * 评估视频标题的可行性，并给出吸睛备选标题（品类由 category 决定，文案取自 config/categories.ts）
  */

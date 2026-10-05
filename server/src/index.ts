@@ -62,7 +62,9 @@ const aiDailyQuota = dailyQuota({ limit: config.aiDailyLimit }); // AI 每日总
 app.use('/api/ai', aiRateLimiter, (req, res, next) => {
   // 只读接口与纯本地保存不消耗 AI 配额，只有可能真正调用 AI 的请求才计数
   const apiPath = req.originalUrl.split('?')[0];
-  if (req.method === 'GET' || apiPath === '/api/ai/account') {
+  // M4：封面/平台检查是纯规则引擎，只有显式要求 AI 润色（useAI=true）才占用每日配额
+  const coverCheckWithoutAI = apiPath === '/api/ai/evaluate-cover' && !(req.body && req.body.useAI === true);
+  if (req.method === 'GET' || apiPath === '/api/ai/account' || coverCheckWithoutAI) {
     next();
     return;
   }

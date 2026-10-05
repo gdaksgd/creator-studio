@@ -16,7 +16,8 @@
      10. category benchmark      (/api/benchmark ships only samples with size + window)
      11. report generation       (/api/report/game-industry returns a sourced report)
      12. report markdown export  (.md carries sample sizes, no unsourced numbers)
-     13. public URL (optional)   (same checks through the tunnel)
+     13. platform fit check      (/api/ai/evaluate-cover pure rules, every rule sourced)
+     14. public URL (optional)   (same checks through the tunnel)
 
     Usage:
         powershell -NoProfile -ExecutionPolicy Bypass -File tools\smoke-test.ps1
@@ -45,13 +46,22 @@ function Write-Check {
 }
 
 function Invoke-Probe {
-    param([string] $Url, [switch] $WithHeaders)
+    param([string] $Url, [switch] $WithHeaders, [string] $JsonBody = '')
     $tmp = [System.IO.Path]::GetTempFileName()
+    $bodyFile = ''
     try {
         $curlArgs = @('-s', '--noproxy', '*', '--max-time', '25', '-o', $tmp, '-w', '%{http_code}')
         if ($WithHeaders) {
             $hdrs = "$tmp.h"
             $curlArgs += @('-D', $hdrs)
+        }
+        if ($JsonBody -ne '') {
+            # Windows curl strips the quotes out of a JSON string passed on the
+            # command line, which makes body-parser return 400. Hand curl a file
+            # with --data-binary instead: no shell/argv quoting involved at all.
+            $bodyFile = "$tmp.body"
+            [System.IO.File]::WriteAllText($bodyFile, $JsonBody, (New-Object System.Text.UTF8Encoding($false)))
+            $curlArgs += @('-X', 'POST', '-H', 'Content-Type: application/json', '--data-binary', "@$bodyFile")
         }
         $code  = & curl.exe @curlArgs $Url 2>$null
         $body  = ''
@@ -66,6 +76,7 @@ function Invoke-Probe {
         }
     } finally {
         Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+        if ($bodyFile -ne '') { Remove-Item $bodyFile -Force -ErrorAction SilentlyContinue }
     }
 }
 
@@ -225,6 +236,82 @@ function Test-Site {
     Write-Check 'report markdown export' `
                 (($md.Status -eq 200) -and ($md.Headers -match 'text/markdown') -and $mdSourced -and $mdClean) `
                 "HTTP $($md.Status), $($md.Body.Length) chars, sourced=$mdSourced"
+
+    # ---- M4: platform fit check (/api/ai/evaluate-cover) -----------------
+    # The rule engine is pure rules: it has to answer with NO AI call at all
+    # (aiUsed=false), and every single rule must carry its own source, so the UI
+    # can show where each verdict comes from. One script, two platforms, two
+    # different length verdicts - that difference is the whole point of M4.
+    # The probe payload is ASCII on purpose (see the ASCII note above).
+    $coverProbe = '{"platform":"bilibili","title":"can a newbie play it","coverText":"from zero","durationSec":453}'
+    $cover = Invoke-Probe "$Root/api/ai/evaluate-cover" -JsonBody $coverProbe
+    $coverOk = $false
+    $coverEngine = ''
+    $coverAiUsed = $true
+    $coverRules = 0
+    $coverSourced = -1
+    $coverTotal = -1
+    $coverBiliMin = 0
+    $coverBiliMax = 0
+    $coverBiliPass = $false
+    $coverAllSourced = $false
+    if ($cover.Body) {
+        try {
+            $cj = $cover.Body | ConvertFrom-Json
+            $coverOk = [bool] $cj.ok
+            $coverEngine = [string] $cj.check.engine
+            $coverAiUsed = [bool] $cj.aiUsed
+            $coverRules = @($cj.check.rules).Count
+            $coverSourced = [int] $cj.check.summary.sourced
+            $coverTotal = [int] $cj.check.summary.total
+            $coverBiliMin = [int] $cj.check.durationAdvice.targetSec[0]
+            $coverBiliMax = [int] $cj.check.durationAdvice.targetSec[1]
+            $coverBiliPass = ([string] $cj.check.durationAdvice.status -eq 'pass')
+            $bad = @($cj.check.rules | Where-Object { -not $_.evidence.source -or ($_.evidence.level -notin @('A', 'B', 'C')) })
+            $coverAllSourced = ($bad.Count -eq 0)
+        } catch { }
+    }
+    Write-Check 'cover check runs without AI' `
+                (($cover.Status -eq 200) -and $coverOk -and (-not $coverAiUsed) -and ($coverEngine -eq 'pure-rules-v1') -and ($coverRules -ge 8) -and ($coverSourced -eq $coverTotal)) `
+                "HTTP $($cover.Status), engine=$coverEngine, aiUsed=$coverAiUsed, rules=$coverRules, sourced=$coverSourced/$coverTotal"
+
+    Write-Check 'cover rules all carry a source' `
+                ($coverAllSourced -and ($coverRules -gt 0)) `
+                "every rule has evidence.source + A/B/C level = $coverAllSourced"
+
+    $coverDy = Invoke-Probe "$Root/api/ai/evaluate-cover" -JsonBody '{"platform":"douyin","title":"can a newbie play it","coverText":"from zero","durationSec":453}'
+    $dyMin = 0
+    $dyMax = 0
+    $dyWarn = $false
+    $dyHint = $false
+    if ($coverDy.Body) {
+        try {
+            $dj = $coverDy.Body | ConvertFrom-Json
+            $dyMin = [int] $dj.check.durationAdvice.targetSec[0]
+            $dyMax = [int] $dj.check.durationAdvice.targetSec[1]
+            $dyWarn = ([string] $dj.check.durationAdvice.status -eq 'warn')
+            $dyHint = [bool] $dj.check.durationAdvice.hint
+        } catch { }
+    }
+    Write-Check 'cover length verdict is per platform' `
+                (($coverBiliMin -eq 180) -and ($coverBiliMax -eq 600) -and $coverBiliPass -and ($dyMin -eq 60) -and ($dyMax -eq 180) -and $dyWarn -and $dyHint) `
+                "bilibili $coverBiliMin-$coverBiliMax pass=$coverBiliPass; douyin $dyMin-$dyMax warn=$dyWarn hint=$dyHint"
+
+    # Two things the engine must NOT do: invent a verdict for a platform it does
+    # not know, and guess a cover verdict when no cover text was supplied.
+    $coverBad = Invoke-Probe "$Root/api/ai/evaluate-cover" -JsonBody '{"platform":"kuaishou","title":"x","durationSec":300}'
+    $coverNone = Invoke-Probe "$Root/api/ai/evaluate-cover" -JsonBody '{"platform":"bilibili","title":"x","durationSec":300}'
+    $noneInfo = $false
+    if ($coverNone.Body) {
+        try {
+            $nj = $coverNone.Body | ConvertFrom-Json
+            $coverRule = @($nj.check.rules | Where-Object { $_.id -eq 'cover-emotion' })[0]
+            $noneInfo = ([string] $coverRule.status -eq 'info') -and [bool] $coverRule.evidence.source
+        } catch { }
+    }
+    Write-Check 'cover refuses to guess' `
+                (($coverBad.Status -eq 400) -and ($coverBad.Body -match '"code"\s*:\s*"BAD_INPUT"') -and $noneInfo) `
+                "unknown platform -> HTTP $($coverBad.Status); no cover text -> info+source=$noneInfo"
 }
 
 Write-Host ''

@@ -363,3 +363,60 @@ export interface Script {
   createdAt: number;
   updatedAt: number;
 }
+
+// ───────────────────────── M4 · 平台适配检查（纯规则引擎，与 server/src/services/platformRules.ts 对应） ─────────────────────────
+
+export type RuleStatus = 'pass' | 'warn' | 'fail' | 'info';
+/** A = 平台官方 / 同行评审；B = 第三方大样本；C = 经验帖或本项目自定义（不用于 KPI） */
+export type EvidenceLevel = 'A' | 'B' | 'C';
+
+export interface RuleEvidence {
+  source: string;
+  level: EvidenceLevel;
+  note?: string;
+}
+
+export interface PlatformRule {
+  id: string;
+  label: string;
+  status: RuleStatus;
+  detail: string;
+  hint?: string;
+  evidence: RuleEvidence;
+}
+
+export interface DurationAdvice {
+  target: string;
+  targetSec: [number, number];
+  status: RuleStatus;
+  detail: string;
+  evidence: RuleEvidence;
+  hint?: string;
+  completionReference?: { text: string; evidence: RuleEvidence };
+}
+
+export interface PlatformCheck {
+  platform: Platform;
+  platformLabel: string;
+  engine: string;
+  durationAdvice: DurationAdvice;
+  rules: PlatformRule[];
+  summary: { total: number; pass: number; warn: number; fail: number; info: number; sourced: number };
+  checkedAt: number;
+  disclaimer: string;
+}
+
+export interface CoverPolishResult {
+  coverCandidates: string[];
+  titleCandidates: string[];
+  rationale: string;
+  model: string;
+}
+
+export interface CoverCheckResponse {
+  ok: boolean;
+  check: PlatformCheck;
+  aiUsed: boolean;
+  ai?: CoverPolishResult;
+  aiError?: string;
+}

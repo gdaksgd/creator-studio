@@ -1,4 +1,4 @@
-import type { BenchmarkSnapshot, GameIndustryReport } from '../types';
+import type { BenchmarkSnapshot, GameIndustryReport, CoverCheckResponse } from '../types';
 
 const API_BASE = '/api';
 
@@ -306,4 +306,22 @@ export const api = {
   // 放在后端是为了让「导出件」可被冒烟测试直接断言（见 tools/smoke-test.ps1）。
   reportMarkdownUrl: (days?: number) =>
     `${API_BASE}/report/game-industry.md${days === undefined ? '' : `?days=${days}`}`,
+
+  // M4 平台适配检查：纯规则引擎（服务器不需要 AI 也能给出全部结论）。
+  // ★ useAI=true 才会调用 AI 润色文案，也才会消耗每日 AI 配额；默认不传就是纯规则。
+  // ★ 每条规则都带 evidence{source,level}，界面上必须显示，不能只显示结论。
+  evaluateCover: (payload: {
+    platform: 'bilibili' | 'douyin';
+    title?: string;
+    coverText?: string;
+    durationSec?: number;
+    ctr?: number;
+    completionRate?: number;
+    postsPerWeek?: number;
+    useAI?: boolean;
+  }) =>
+    request<CoverCheckResponse>('/ai/evaluate-cover', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 };
