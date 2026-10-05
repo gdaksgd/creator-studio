@@ -7,6 +7,7 @@ import ScriptEditor from './pages/ScriptEditor'
 import InfoCenter from './pages/InfoCenter'
 import Analytics from './pages/Analytics'
 import Materials from './pages/Materials'
+import Report from './pages/Report'
 import Settings from './pages/Settings'
 
 function App() {
@@ -23,6 +24,7 @@ function App() {
         <Route path="/scripts/:scriptId" element={<ScriptEditor />} />
         <Route path="/info" element={<InfoCenter />} />
         <Route path="/analytics" element={<Analytics />} />
+        <Route path="/report" element={<Report />} />
         <Route path="/materials" element={<Materials />} />
         <Route path="/settings" element={<Settings />} />
       </Route>

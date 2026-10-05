@@ -11,14 +11,15 @@ export default function Layout() {
   return (
     <div className="min-h-screen flex flex-col">
       <header className="bg-surface border-b border-border sticky top-0 z-10">
-        <div className="max-w-6xl mx-auto px-6 h-14 flex items-center justify-between">
+        {/* flex-wrap：导航有 7 项，窄屏必须能换行，否则会把页面撑出横向滚动 */}
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-2 min-h-14 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
           <div className="flex items-center gap-3">
             <span className="text-lg font-bold text-primary">Creator Studio</span>
-            <span className="text-xs text-text-secondary bg-gray-100 px-2 py-0.5 rounded-full">
+            <span className="hidden sm:inline text-xs text-text-secondary bg-gray-100 px-2 py-0.5 rounded-full">
               自媒体创作助手
             </span>
           </div>
-          <nav className="flex items-center gap-1">
+          <nav className="flex flex-wrap items-center gap-1">
             <NavLink to="/" end className={linkClass}>
               选题看板
             </NavLink>
@@ -34,6 +35,9 @@ export default function Layout() {
             <NavLink to="/analytics" className={linkClass}>
               数据看板
             </NavLink>
+            <NavLink to="/report" className={linkClass}>
+              分析报告
+            </NavLink>
             <NavLink to="/settings" className={linkClass}>
               设置
             </NavLink>
@@ -41,7 +45,7 @@ export default function Layout() {
         </div>
       </header>
 
-      <main className="flex-1 max-w-6xl mx-auto w-full px-6 py-6">
+      <main className="flex-1 max-w-6xl mx-auto w-full px-4 sm:px-6 py-4 sm:py-6">
         <Outlet />
       </main>
     </div>

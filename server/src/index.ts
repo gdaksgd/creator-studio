@@ -11,6 +11,7 @@ import aiRoutes from './routes/ai.js';
 import syncRoutes from './routes/sync.js';
 import videoRoutes from './routes/video.js';
 import benchmarkRoutes from './routes/benchmark.js';
+import reportRoutes from './routes/report.js';
 import { refreshAll as refreshBenchmarks } from './services/benchmarkService.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -97,6 +98,7 @@ app.use('/api/ai', aiRoutes);
 app.use('/api/sync', syncRoutes);
 app.use('/api/video', videoRoutes);
 app.use('/api/benchmark', benchmarkRoutes);
+app.use('/api/report', reportRoutes);
 
 // 未匹配的 /api/* 一律返回 404 JSON（不能落到 SPA fallback 返回 HTML）
 app.use('/api', (req, res) => {

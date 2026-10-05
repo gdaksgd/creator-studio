@@ -83,6 +83,130 @@ export interface BenchmarkSnapshot {
   gaps: BenchmarkGap[];
 }
 
+// ─── M3：《B站游戏区内容分析报告》──────────────────────────
+// 与 server/src/types.ts 的 M3 类型块一一对应。数字一律用 ReportMetric
+// （值 + 展示串 + 出处），前端不允许自己 format 出一个没有出处的数字。
+
+/** 报告里每个数字的来源声明 */
+export interface ReportBasis {
+  source: 'bilibili-popular' | 'bilibili-search' | 'derived';
+  sourceLabel: string;
+  sampleSize: number;
+  /** null = 榜单快照口径，不是一个时间窗 */
+  windowDays: number | null;
+  collectedAt: number;
+  method: string;
+}
+
+/** 一个带出处的数字。display 是唯一允许显示给用户的形态。 */
+export interface ReportMetric {
+  label: string;
+  value: number;
+  display: string;
+  unit: 'views' | 'rate' | 'seconds' | 'count' | 'chars' | 'ratio';
+  basis: ReportBasis;
+}
+
+export type CompetitionIntensity = 'high' | 'medium' | 'low';
+
+export interface ReportCategoryLine {
+  key: string;
+  label: string;
+  sampleSize: number;
+  windowDays: number | null;
+  sourceLabel: string;
+  viewMedian: ReportMetric;
+  viewP90: ReportMetric;
+  likeRateMedian: ReportMetric | null;
+  concentration: ReportMetric;
+  intensity: CompetitionIntensity;
+  questionRatio: ReportMetric;
+  durationMedian: ReportMetric;
+  unavailable: string[];
+}
+
+export interface ReportKeyword {
+  word: string;
+  count: number;
+  ratio: number;
+}
+
+export interface ReportTitlePattern {
+  basis: ReportBasis;
+  questionRatio: ReportMetric;
+  lengthP25: ReportMetric;
+  lengthMedian: ReportMetric;
+  lengthP75: ReportMetric;
+  lengthBuckets: Array<{ label: string; count: number; ratio: number }>;
+  keywords: ReportKeyword[];
+  caveat: string;
+}
+
+export interface ReportDurationBucket {
+  label: string;
+  minSec: number;
+  maxSec: number | null;
+  videoCount: number;
+  viewMedian: ReportMetric;
+  likeRateMedian: ReportMetric | null;
+}
+
+export interface ReportDurationCurve {
+  basis: ReportBasis;
+  buckets: ReportDurationBucket[];
+  bestBucket: string | null;
+  trend: 'decreasing' | 'increasing' | 'flat' | 'unknown';
+  caveat: string;
+}
+
+export interface ReportTimingBucket {
+  hour: number;
+  videoCount: number;
+  viewMedian: number;
+}
+
+export interface ReportPublishTiming {
+  basis: ReportBasis;
+  timezone: string;
+  buckets: ReportTimingBucket[];
+  topHours: number[];
+  caveat: string;
+}
+
+export interface ReportEvidence {
+  claim: string;
+  origin: string;
+  grade: 'A' | 'B' | 'C';
+  usedIn: string;
+}
+
+export interface ReportSuggestion {
+  text: string;
+  basis?: ReportBasis;
+}
+
+export interface ReportSelfCheck {
+  metricCount: number;
+  unbackedMetricCount: number;
+}
+
+export interface GameIndustryReport {
+  ready: boolean;
+  error?: string;
+  generatedAt: number;
+  days: number;
+  scope: ReportBasis;
+  poolSize: number;
+  categories: ReportCategoryLine[];
+  titlePattern: ReportTitlePattern;
+  durationCurve: ReportDurationCurve;
+  publishTiming: ReportPublishTiming;
+  suggestions: ReportSuggestion[];
+  evidence: ReportEvidence[];
+  unavailable: string[];
+  selfCheck: ReportSelfCheck;
+}
+
 export interface TopicEvaluation {
   score: number;
   heatLevel: number;

@@ -1,6 +1,12 @@
-import type { BenchmarkSnapshot } from '../types';
+import type { BenchmarkSnapshot, GameIndustryReport } from '../types';
 
 const API_BASE = '/api';
+
+/** 报告接口的成功响应包装（后端在 ok=false 时直接返回非 2xx，由 request() 抛 ApiError） */
+export interface ReportResponse {
+  ok: boolean;
+  report: GameIndustryReport;
+}
 
 /** 带 HTTP 状态码与后端业务错误码的错误，便于调用方按 code 分支处理 */
 export class ApiError extends Error {
@@ -290,4 +296,14 @@ export const api = {
   //   绝不能用 0 或占位数字顶替。
   getBenchmark: () => request<BenchmarkSnapshot>('/benchmark'),
   refreshBenchmark: () => request<BenchmarkSnapshot>('/benchmark/refresh', { method: 'POST' }),
+
+  // M3 分析报告
+  // ★ ready=false 时后端返回 503 NOT_READY（不是空报告），调用方据此显示「正在补采」。
+  getReport: (days?: number) =>
+    request<ReportResponse>(`/report/game-industry${days === undefined ? '' : `?days=${days}`}`),
+
+  // Markdown 导出：由后端渲染，前端只负责触发下载。
+  // 放在后端是为了让「导出件」可被冒烟测试直接断言（见 tools/smoke-test.ps1）。
+  reportMarkdownUrl: (days?: number) =>
+    `${API_BASE}/report/game-industry.md${days === undefined ? '' : `?days=${days}`}`,
 };

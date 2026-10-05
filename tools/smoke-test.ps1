@@ -13,7 +13,10 @@
       7. bundle is served        (hashed JS asset referenced by index.html)
       8. password is gone        (bundle must not contain the old secret)
       9. video stat endpoint     (/api/video/stat returns real data, own throttle)
-     10. public URL (optional)   (same checks through the tunnel)
+     10. category benchmark      (/api/benchmark ships only samples with size + window)
+     11. report generation       (/api/report/game-industry returns a sourced report)
+     12. report markdown export  (.md carries sample sizes, no unsourced numbers)
+     13. public URL (optional)   (same checks through the tunnel)
 
     Usage:
         powershell -NoProfile -ExecutionPolicy Bypass -File tools\smoke-test.ps1
@@ -181,6 +184,47 @@ function Test-Site {
     $bmHdr = Invoke-Probe "$Root/api/benchmark" -WithHeaders
     Write-Check 'benchmark route has own throttle' ($bmHdr.Headers -match 'X-RateLimit-Limit:\s*30') `
                 'X-RateLimit-Limit: 30'
+
+    # ---- M3: analysis report (/api/report/game-industry) -----------------
+    # The report is the deliverable that leaves the app (Markdown export), so the
+    # data-honesty rule has to hold on the way out too: every number that ships
+    # must still carry its sample size and window.
+    $rep = Invoke-Probe "$Root/api/report/game-industry"
+    $repOk = $false
+    $repReady = $false
+    $repCats = 0
+    $repDays = 0
+    $repMetrics = 0
+    $repUnbacked = -1
+    if ($rep.Body) {
+        try {
+            $repJson = $rep.Body | ConvertFrom-Json
+            $repOk = [bool] $repJson.ok
+            $repReady = [bool] $repJson.report.ready
+            $repDays = [int] $repJson.report.days
+            if ($repJson.report.categories) { $repCats = @($repJson.report.categories).Count }
+            $repMetrics = [int] $repJson.report.selfCheck.metricCount
+            $repUnbacked = [int] $repJson.report.selfCheck.unbackedMetricCount
+        } catch { }
+    }
+    Write-Check 'report endpoint served' `
+                (($rep.Status -eq 200) -and $repOk -and $repReady -and ($repCats -gt 0) -and ($repDays -eq 30)) `
+                "HTTP $($rep.Status), ready=$repReady, categories=$repCats, days=$repDays"
+
+    Write-Check 'report numbers all carry a source' `
+                (($repUnbacked -eq 0) -and ($repMetrics -gt 0)) `
+                "metrics=$repMetrics, without basis=$repUnbacked"
+
+    # Note: this script is deliberately ASCII-only (PowerShell 5.1 reads .ps1 as
+    # ANSI without a BOM, so non-ASCII literals would be mangled). The report
+    # therefore publishes an ASCII self-check marker we can assert on:
+    #   <!-- report-selfcheck ready=true metrics=64 unbacked=0 -->
+    $md = Invoke-Probe "$Root/api/report/game-industry.md" -WithHeaders
+    $mdSourced = ([regex]::Matches($md.Body, 'n=\d+')).Count -ge 6
+    $mdClean = ($md.Body -match 'report-selfcheck ready=true metrics=\d+ unbacked=0')
+    Write-Check 'report markdown export' `
+                (($md.Status -eq 200) -and ($md.Headers -match 'text/markdown') -and $mdSourced -and $mdClean) `
+                "HTTP $($md.Status), $($md.Body.Length) chars, sourced=$mdSourced"
 }
 
 Write-Host ''

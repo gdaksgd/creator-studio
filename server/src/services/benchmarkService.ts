@@ -58,6 +58,22 @@ interface CacheFile {
   collectedAt: number;
   samples: BenchmarkSample[];
   gaps: BenchmarkGap[];
+  /**
+   * M3 原始样本池。M2 只落盘聚合带（分位数），但「标题模式 / 时长–互动率 / 发布时段」
+   * 这三个维度必须在原始条目上算，所以这里把归一化后的条目也一并存下来。
+   * ★ 只新增字段、不改已有字段：旧缓存读出来 pool 为 undefined，
+   *   上层据此触发一次重采（见 needsPool），而不是拿空数组算出「0 条」的假结论。
+   */
+  popular: PopularPoolItem[];
+  search: SearchPoolItem[];
+}
+
+/** 热门榜池：指标完整（含投币/分享），带 B站子分区名 */
+export type PopularPoolItem = RawBenchmarkItem;
+
+/** 搜索池：该来源不提供投币/分享；group = 采到它的品类 id */
+export interface SearchPoolItem extends RawBenchmarkItem {
+  group: string;
 }
 
 // ─── 统计工具 ──────────────────────────────────────────────
@@ -248,11 +264,21 @@ function snapshotFromCache(): BenchmarkSnapshot {
   };
 }
 
+/**
+ * M3 的报告要算「标题模式 / 时长–互动率 / 发布时段」，需要原始条目池。
+ * M2 版本写出的缓存没有这两个字段 —— 把它并入「过期」判定，
+ * 这样升级后会自动补采一次，而不是让报告页面永远显示「暂无数据」。
+ */
+function needsPool(c: CacheFile | null): boolean {
+  return !c || !Array.isArray(c.popular) || !Array.isArray(c.search);
+}
+
 // ─── 采集 ─────────────────────────────────────────────────
 
 async function collectAll(): Promise<CacheFile> {
   const samples: BenchmarkSample[] = [];
   const gaps: BenchmarkGap[] = [];
+  const searchPool: SearchPoolItem[] = [];
 
   const popular = await fetchPopularPages(POPULAR_PAGES);
   console.log(`[benchmark] 热门榜采集 ${popular.length} 条`);
@@ -290,6 +316,7 @@ async function collectAll(): Promise<CacheFile> {
   for (const cat of CATEGORIES) {
     if (!cat.biliKeywords.length) continue;
     const items = await fetchSearchWindows(cat.biliKeywords, SEARCH_WINDOW_DAYS);
+    for (const it of items) searchPool.push({ ...it, group: cat.id });
     const s = buildSample(items, {
       scope: 'category',
       key: cat.id,
@@ -308,7 +335,7 @@ async function collectAll(): Promise<CacheFile> {
     throw new Error('两类数据源都没有采到足够样本');
   }
 
-  return { collectedAt: Date.now(), samples, gaps };
+  return { collectedAt: Date.now(), samples, gaps, popular, search: searchPool };
 }
 
 /** 强制全量重采（并发调用会复用同一个进行中的任务） */
@@ -339,14 +366,14 @@ export function refreshAll(): Promise<BenchmarkSnapshot> {
 /** 确保有可用缓存；过期则重采。已有旧缓存时即使重采失败也不抛错。 */
 export async function ensureReady(): Promise<void> {
   const c = readCache();
-  if (c && c.samples.length && Date.now() - c.collectedAt <= CACHE_TTL_MS) return;
+  if (c && c.samples.length && !needsPool(c) && Date.now() - c.collectedAt <= CACHE_TTL_MS) return;
   await refreshAll();
 }
 
 /** 只读快照。缓存过期时在后台触发重采，不阻塞调用方。 */
 export function getSnapshot(): BenchmarkSnapshot {
   const c = readCache();
-  const stale = !c || Date.now() - c.collectedAt > CACHE_TTL_MS;
+  const stale = !c || Date.now() - c.collectedAt > CACHE_TTL_MS || needsPool(c);
   if (stale && !collectingPromise) void refreshAll();
   return snapshotFromCache();
 }
@@ -423,4 +450,40 @@ export function buildBasis(categoryId: string, estimatedViewsText: string | unde
 /** 供路由展示的完整样本（去掉给 AI 用的内部字段） */
 export function listSamples(): BenchmarkSample[] {
   return readCache()?.samples ?? [];
+}
+
+// ─── 给 M3 报告用 ──────────────────────────────────────────
+
+/**
+ * 原始样本池。缺池（旧版缓存）时返回 null —— 调用方必须如实说明「需要重新采集」，
+ * 绝不能把空池当成「样本里一条视频都没有」。
+ */
+export function getReportPool(): {
+  popular: PopularPoolItem[];
+  search: SearchPoolItem[];
+  collectedAt: number;
+} | null {
+  const c = readCache();
+  if (!c || !Array.isArray(c.popular) || !Array.isArray(c.search)) return null;
+  return { popular: c.popular, search: c.search, collectedAt: c.collectedAt };
+}
+
+/** 采集中的进度（报告路由用来告诉前端「正在补采」） */
+export function isCollecting(): boolean {
+  return collectingPromise !== null;
+}
+
+/** 上一次采集失败原因（有旧缓存时会带在快照里） */
+export function lastCollectError(): string | undefined {
+  return lastError;
+}
+
+/** 每个品类在搜索池里的样本量，供报告解释「为什么这个品类没有基准线」 */
+export function searchPoolSizeByGroup(): Record<string, number> {
+  const c = readCache();
+  const out: Record<string, number> = {};
+  for (const item of c?.search ?? []) {
+    out[item.group] = (out[item.group] ?? 0) + 1;
+  }
+  return out;
 }
