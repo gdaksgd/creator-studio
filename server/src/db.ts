@@ -48,7 +48,6 @@ function ensureDB(): void {
 // 原子写入：先写同目录临时文件 -> fsync 落盘 -> rename 覆盖目标。
 // rename 在同一文件系统内是原子的，所以进程崩溃/断电时，
 // db.json 要么是旧的完整内容，要么是新的完整内容，不会出现半截 JSON。
-// 基准线缓存（benchmarkService）复用同一个实现。
 export function atomicWriteFile(targetPath: string, payload: string): void {
   const tmpPath = `${targetPath}.tmp`;
   let fd: number | null = null;

@@ -22,12 +22,6 @@ export interface CategoryDef {
   newsQueries: string[];
   /** RSS / B站标题分类关键词（命中即归入该品类） */
   rssKeywords: string[];
-  /**
-   * B站搜索关键词：用来采集「该品类近期最热视频」，算出互动率水位线。
-   * ★ 与 rssKeywords 分开维护：rssKeywords 是英文/标题匹配词，这里是中文搜索词。
-   *   留空数组表示该品类不提供基准线，前端会显示「暂无基准数据」而不是编一个。
-   */
-  biliKeywords: string[];
 }
 
 export const CATEGORIES: CategoryDef[] = [
@@ -47,7 +41,6 @@ export const CATEGORIES: CategoryDef[] = [
       '卡牌游戏 新卡组',
     ],
     rssKeywords: ['卡牌', '卡组', 'tcg', 'hearthstone', 'yugioh', 'magic the gathering', 'mtg', 'deck', 'pokemon tcg'],
-    biliKeywords: ['卡牌游戏'],
   },
   {
     id: 'horror',
@@ -64,7 +57,6 @@ export const CATEGORIES: CategoryDef[] = [
       'survival horror game',
     ],
     rssKeywords: ['horror', '恐怖', 'scary', 'survival horror', 'resident evil', 'silent hill', 'fatal frame'],
-    biliKeywords: ['恐怖游戏'],
   },
   {
     id: 'indie',
@@ -81,7 +73,6 @@ export const CATEGORIES: CategoryDef[] = [
       'roguelike new release',
     ],
     rssKeywords: ['indie', '独立游戏', 'roguelike', 'pixel art', 'early access'],
-    biliKeywords: ['独立游戏'],
   },
   {
     id: 'rpg',
@@ -98,7 +89,6 @@ export const CATEGORIES: CategoryDef[] = [
       'baldurs gate 3 update',
     ],
     rssKeywords: ['rpg', 'jrpg', '剧情', 'story', 'narrative', '开放世界'],
-    biliKeywords: ['RPG游戏', '剧情向游戏'],
   },
   {
     id: 'action',
@@ -115,7 +105,6 @@ export const CATEGORIES: CategoryDef[] = [
       'character action game new',
     ],
     rssKeywords: ['action', 'soulslike', '动作', 'boss', 'hack and slash', 'metroidvania'],
-    biliKeywords: ['动作游戏'],
   },
   {
     id: 'sim',
@@ -132,7 +121,6 @@ export const CATEGORIES: CategoryDef[] = [
       'management game review',
     ],
     rssKeywords: ['simulation', '模拟', '经营', 'city builder', 'colony', 'management', 'farming'],
-    biliKeywords: ['模拟经营'],
   },
   {
     id: 'mobile',
@@ -149,7 +137,6 @@ export const CATEGORIES: CategoryDef[] = [
       'arknights new event',
     ],
     rssKeywords: ['手游', 'gacha', 'mobile game', '原神', '崩坏', '明日方舟', '抽卡'],
-    biliKeywords: ['手游攻略'],
   },
   {
     id: 'industry',
@@ -166,7 +153,6 @@ export const CATEGORIES: CategoryDef[] = [
       'game publisher acquisition',
     ],
     rssKeywords: ['industry', '行业', 'layoff', 'acquisition', 'revenue', '财报', '裁员', '收购'],
-    biliKeywords: ['游戏行业'],
   },
 ];
 
@@ -180,7 +166,6 @@ export const GENERAL_CATEGORY: CategoryDef = {
   titleStyle: '',
   newsQueries: ['video game news', '游戏资讯'],
   rssKeywords: [],
-  biliKeywords: [],
 };
 
 export const ALL_CATEGORIES: CategoryDef[] = [...CATEGORIES, GENERAL_CATEGORY];

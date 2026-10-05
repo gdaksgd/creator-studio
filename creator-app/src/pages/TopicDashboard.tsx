@@ -541,27 +541,6 @@ export default function TopicDashboard() {
                     <span className="text-text-secondary">{evaluation.estimatedViews}</span>
                   </div>
 
-                  {/* ★ 数据诚实原则：必须让用户分清这个数字是「有样本算出来的」还是「模型猜的」 */}
-                  {evaluation.basis &&
-                    (evaluation.basis.source === 'benchmark' ? (
-                      <div className="text-xs rounded-lg px-3 py-2 bg-emerald-50 border border-emerald-200 text-emerald-800">
-                        数据依据：{evaluation.basis.label ?? '同品类'}真实样本
-                        {evaluation.basis.sampleSize != null && `（${evaluation.basis.sampleSize} 条`}
-                        {evaluation.basis.windowDays != null
-                          ? `，近 ${evaluation.basis.windowDays} 天）`
-                          : '，榜单快照）'}
-                        {evaluation.basis.percentile != null &&
-                          (evaluation.basis.percentile <= 0
-                            ? '· 该预估低于样本最低值'
-                            : evaluation.basis.percentile >= 100
-                              ? '· 该预估高于样本最高值'
-                              : `· 该预估约处于 P${evaluation.basis.percentile} 水位`)}
-                      </div>
-                    ) : (
-                      <div className="text-xs rounded-lg px-3 py-2 bg-amber-50 border border-amber-200 text-amber-800">
-                        暂无该品类的真实基准数据，本条预估为 AI 推断，未经数据校验
-                      </div>
-                    ))}
                   <div>
                     <span className="font-medium text-text">推荐平台: </span>
                     <span className="text-text-secondary">{evaluation.bestPlatform}</span>

@@ -20,14 +20,13 @@ interface WbiCache {
 
 let wbiCache: WbiCache | null = null;
 
-export const BILI_HEADERS = {
+const BILI_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
   'Referer': 'https://www.bilibili.com',
   'Accept-Language': 'zh-CN,zh;q=0.9',
 };
 
-/** 供基准线采集器复用；带 1 小时缓存 */
-export async function getMixinKey(): Promise<string> {
+async function getMixinKey(): Promise<string> {
   if (wbiCache && wbiCache.expires > Date.now()) {
     return wbiCache.mixinKey;
   }
@@ -50,7 +49,7 @@ export async function getMixinKey(): Promise<string> {
   return mixinKey;
 }
 
-export function signWbi(params: Record<string, string | number>, mixinKey: string) {
+function signWbi(params: Record<string, string | number>, mixinKey: string) {
   const wts = Math.floor(Date.now() / 1000);
   const allParams: Record<string, string> = {};
   for (const [k, v] of Object.entries(params)) {

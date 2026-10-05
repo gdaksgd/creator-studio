@@ -3,7 +3,6 @@ import { config, isAIConfigured } from '../config.js';
 import { db } from '../db.js';
 import type { TopicEvaluation, ScriptSuggestion, NewsItem, IdeaEvaluation, TitleEvaluation, MaterialAnalysisResponse, AnimeSource } from '../types.js';
 import { getCategory, describeCategory } from '../config/categories.js';
-import { buildBasis, formatBenchmarkForPrompt } from './benchmarkService.js';
 
 function getClient(): OpenAI {
   return new OpenAI({
@@ -65,13 +64,6 @@ export async function evaluateTopic(
 
   const focusList = cat.aiFocus.length ? cat.aiFocus.join('、') : '内容可看性与热点契合度';
 
-  // 真实基准线。为 null 表示该品类没有可信样本 —— 此时必须明确告诉 AI「无数据支撑」，
-  // 而不是让它继续凭感觉给播放量。（数据诚实原则）
-  const benchmark = formatBenchmarkForPrompt(cat.id);
-  const benchmarkBlock = benchmark
-    ? `\n${benchmark}\n`
-    : `\n## 真实基准数据\n（暂无该品类的真实基准数据，本次评估没有数据支撑。请只给方向性判断，并明确说明依据不足，不要编造具体的播放量或互动率数字。）\n`;
-
   const gameInfoSection = gameDescription && gameDescription.trim()
     ? `\n## 游戏信息\n游戏标题: ${topicTitle}\n游戏简介: ${gameDescription}\n`
     : '';
@@ -113,7 +105,6 @@ ${categoryBrief(category)}
 ## 最近相关热门资讯
 ${newsContext || '暂无数据'}
 
-${benchmarkBlock}
 ${specialFocusPrompt}
 
 ## 请评估
@@ -145,8 +136,7 @@ ${specialFocusPrompt}
 
   try {
     const parsed = JSON.parse(jsonStr) as TopicEvaluation;
-    // basis 一律由服务端依据真实样本计算，不让模型自己声明「我有数据支撑」。
-    return { ...parsed, basis: buildBasis(cat.id, parsed.estimatedViews) };
+    return parsed;
   } catch {
     return {
       score: 0,
@@ -159,7 +149,6 @@ ${specialFocusPrompt}
       risks: '未知',
       bestPlatform: '未知',
       bestTime: '未知',
-      basis: { source: 'ai' },
     };
   }
 }
