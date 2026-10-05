@@ -1,4 +1,4 @@
-import { api } from '../api/client';
+import { api, ApiError } from '../api/client';
 import { db } from '../db';
 import { useTopicStore } from '../store/topicStore';
 import { useScriptStore } from '../store/scriptStore';
@@ -24,10 +24,21 @@ async function syncUpload(): Promise<void> {
     const scripts = await db.scripts.toArray();
     const uploadedAt = Date.now();
 
-    await api.uploadSync({ topics, scripts, uploadedAt });
+    // 乐观锁：带上「上次同步到的云端时间戳」。
+    // 若云端已被其它设备更新，后端返回 409 CONFLICT，我们放弃本次上传，
+    // 避免用本机的旧数据把云端较新的数据覆盖掉。
+    const baseUploadedAt = parseInt(localStorage.getItem('lastSyncAt') || '0') || undefined;
+
+    await api.uploadSync({ topics, scripts, uploadedAt, baseUploadedAt });
     localStorage.setItem('lastSyncAt', String(uploadedAt));
     console.log('[sync] Upload complete:', topics.length, 'topics,', scripts.length, 'scripts');
   } catch (err) {
+    if (err instanceof ApiError && err.code === 'CONFLICT') {
+      console.warn('[sync] Cloud is newer (409 CONFLICT) — downloading instead of overwriting');
+      isSyncing = false;
+      await syncDownload();
+      return;
+    }
     console.error('[sync] Upload failed:', err);
   } finally {
     isSyncing = false;
@@ -42,7 +53,10 @@ async function syncDownload(): Promise<void> {
   try {
     const cloud = await api.downloadSync();
 
-    if (!cloud.uploadedAt || cloud.uploadedAt === 0) {
+    // empty: 后端明确告知「查询成功但云端无数据」；
+    // 若下载失败，api.downloadSync() 会直接抛错（502/503），不会走到这里，
+    // 因此不会再出现「查询失败被当成云端为空 → 用本地空数据覆盖云端」。
+    if (cloud.empty || !cloud.uploadedAt || cloud.uploadedAt === 0) {
       // Cloud has no data — if local has data, upload it
       const localTopics = await db.topics.toArray();
       const localScripts = await db.scripts.toArray();

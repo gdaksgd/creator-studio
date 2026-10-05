@@ -2,12 +2,44 @@ import OpenAI from 'openai';
 import { config, isAIConfigured } from '../config.js';
 import { db } from '../db.js';
 import type { TopicEvaluation, ScriptSuggestion, NewsItem, IdeaEvaluation, TitleEvaluation, MaterialAnalysisResponse, AnimeSource } from '../types.js';
+import { getCategory, describeCategory } from '../config/categories.js';
 
 function getClient(): OpenAI {
   return new OpenAI({
     baseURL: 'https://api.deepseek.com',
     apiKey: config.deepseekApiKey,
   });
+}
+
+// 品类文案一律来自 config/categories.ts（单一事实来源），此处不再硬编码任何品类名。
+
+/** 「游戏简介锚定」约束是否适用：配置里声明了惊吓/氛围关注点的品类（如恐怖游戏）始终适用，
+ *  其它品类只要提供了游戏简介也同样适用。由 CategoryDef.aiFocus 驱动，新增品类无需改这里。 */
+function needsGameGrounding(category: string, gameDescription?: string): boolean {
+  if (gameDescription && gameDescription.trim()) return true;
+  return getCategory(category).aiFocus.some((f) => f.includes('Jump Scare'));
+}
+
+/** 该品类是否属于「以惊吓/氛围为核心卖点」的类型（配置驱动：aiFocus 里写了 Jump Scare） */
+function isJumpscareGenre(category: string): boolean {
+  return getCategory(category).aiFocus.some((f) => f.includes('Jump Scare'));
+}
+
+/** 「只依据本作简介、不要牵扯其它作品」的通用约束文案 */
+function groundedConstraint(category: string): string {
+  const label = getCategory(category).label;
+  return `- 请仅根据上面提供的游戏标题和游戏简介来分析，不要引用、对比或提及其他未在简介中出现的游戏作品。
+- 如果你不熟悉这款游戏，请基于提供的简介内容进行推断分析，不要臆想游戏的具体内容、机制或场景。
+- 所有建议都必须针对这款具体游戏，而不是泛泛的${label}通用建议。`;
+}
+
+/** 品类画像段落：受众特征 + 评估关注点 + 标题风格，全部取自 config/categories.ts */
+function categoryBrief(category: string): string {
+  const c = getCategory(category);
+  const lines = [describeCategory(category)];
+  if (c.aiFocus.length) lines.push(`评估关注点：${c.aiFocus.join('、')}`);
+  if (c.titleStyle) lines.push(`标题风格建议：${c.titleStyle}`);
+  return lines.join('\n');
 }
 
 export async function evaluateTopic(
@@ -20,40 +52,47 @@ export async function evaluateTopic(
     throw new Error('AI 未配置，请在 .env 中设置 DEEPSEEK_API_KEY');
   }
 
+  const cat = getCategory(category);
   const accountInfo = db.getAccountInfo();
   const recentNews = db.getNews()
-    .filter((n) => n.category === category)
+    .filter((n) => n.category === cat.id)
     .slice(0, 10);
 
   const newsContext = recentNews
     .map((n) => `- ${n.title}（来源: ${n.source}，${n.metrics?.views ? n.metrics.views + '播放' : ''}）`)
     .join('\n');
 
-  const isHorror = category === 'horror';
-  const gameInfoSection = isHorror && gameDescription && gameDescription.trim()
+  const focusList = cat.aiFocus.length ? cat.aiFocus.join('、') : '内容可看性与热点契合度';
+
+  const gameInfoSection = gameDescription && gameDescription.trim()
     ? `\n## 游戏信息\n游戏标题: ${topicTitle}\n游戏简介: ${gameDescription}\n`
     : '';
 
-  const horrorPrompt = isHorror
+  // 恐怖/惊吓类品类的特殊评估角度：由配置 aiFocus 中的 Jump Scare 关注点驱动（见 isJumpscareGenre），
+  // 保留该分析但不再用 category === 'horror' 硬编码判断。
+  const specialFocusPrompt = isJumpscareGenre(category)
     ? `## 评估重点
-你正在评估一款恐怖游戏作为视频选题的可行性。请严格基于上面提供的游戏标题和游戏简介来分析，不要引用、对比或提及其他未在简介中出现的游戏作品（如寂静岭、生化危机、逃生等）。
+你正在评估一款${cat.label}作为视频选题的可行性。请严格基于上面提供的游戏标题和游戏简介来分析，不要引用、对比或提及其他未在简介中出现的游戏作品。
 
 如果你不熟悉这款游戏，请基于提供的简介内容进行推断分析，不要臆想游戏的具体内容、机制或场景。
 
 分析要点：
-1. 根据简介描述，这款游戏有哪些适合做视频的恐怖元素（Jump Scare、心理恐怖、氛围营造等）
+1. 根据简介描述，这款游戏在以下关注点上有哪些适合做视频的元素（${focusList}）
 2. 游戏的观赏性如何？观众看别人玩会觉得有趣吗？
 3. 这个游戏目前在B站/抖音上的热度如何？是否值得追热点？
-4. 适合做什么类型的视频（实况reaction、剧情解说、恐怖游戏合集等）`
+4. 适合做什么类型的视频（实况reaction、剧情解说、合集等）`
     : '';
 
   const prompt = `你是一个B站和抖音游戏视频自媒体运营专家，擅长分析选题可行性。
 
 ## 当前选题
 标题: ${topicTitle}
-分类: ${isHorror ? '恐怖游戏' : '卡牌游戏'}
-${isHorror ? '' : `备注: ${notes || '无'}`}
+分类: ${cat.label}
+${notes ? `备注: ${notes}` : ''}
 ${gameInfoSection}
+## 品类画像（受众与关注点）
+${categoryBrief(category)}
+
 ## 创作者账号情况
 - B站粉丝: ${accountInfo.bilibiliFollowers}
 - B站平均播放: ${accountInfo.bilibiliAvgViews}
@@ -66,7 +105,7 @@ ${gameInfoSection}
 ## 最近相关热门资讯
 ${newsContext || '暂无数据'}
 
-${horrorPrompt}
+${specialFocusPrompt}
 
 ## 请评估
 请严格按以下JSON格式返回，不要有任何其他文字：
@@ -77,7 +116,7 @@ ${horrorPrompt}
   "competitionLevel": 1-10的整数,
   "difficulty": "制作难度描述",
   "estimatedViews": "预估播放量区间",
-  "suggestions": "具体建议，${isHorror ? '包括适合的视频类型和切入角度' : '包括切入角度和内容方向'}",
+  "suggestions": "具体建议，包括切入角度和内容方向，重点关注：${focusList}",
   "titleSuggestions": ["建议视频标题1", "建议视频标题2", "建议视频标题3"],
   "risks": "潜在风险和注意事项",
   "bestPlatform": "B站/抖音/双平台",
@@ -96,7 +135,8 @@ ${horrorPrompt}
   const jsonStr = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
 
   try {
-    return JSON.parse(jsonStr);
+    const parsed = JSON.parse(jsonStr) as TopicEvaluation;
+    return parsed;
   } catch {
     return {
       score: 0,
@@ -127,25 +167,35 @@ export async function evaluateProductionIdea(
     throw new Error('请先填写制作思路');
   }
 
+  const cat = getCategory(category);
   const accountInfo = db.getAccountInfo();
   const recentNews = db.getNews()
-    .filter((n) => n.category === category)
+    .filter((n) => n.category === cat.id)
     .slice(0, 5);
 
   const newsContext = recentNews
     .map((n) => `- ${n.title}（${n.metrics?.views ? n.metrics.views + '播放' : ''}）`)
     .join('\n');
 
-  const isHorror = category === 'horror';
-  const gameInfoSection = isHorror && gameDescription && gameDescription.trim()
+  const focusList = cat.aiFocus.length ? cat.aiFocus.join('、') : '内容可看性与热点契合度';
+
+  const gameInfoSection = gameDescription && gameDescription.trim()
     ? `\n## 游戏信息\n游戏标题: ${topicTitle}\n游戏简介: ${gameDescription}\n`
+    : '';
+
+  // 是否需要「本作锚定」提示：配置声明了惊吓/氛围关注点的品类，或用户填了游戏简介
+  const groundingPrompt = needsGameGrounding(category, gameDescription)
+    ? `## 重要提示
+${groundedConstraint(category)}
+`
     : '';
 
   const prompt = `你是一个B站和抖音游戏视频制作资深顾问，擅长评估视频制作思路的可行性。
 
 ## 选题信息
 标题: ${topicTitle}
-分类: ${category === 'card' ? '卡牌游戏' : '恐怖游戏'}
+分类: ${cat.label}
+品类画像: ${describeCategory(category)}
 ${gameInfoSection}
 ## 创作者的制作思路
 ${productionIdea}
@@ -158,18 +208,14 @@ ${productionIdea}
 ## 最近相关热门内容
 ${newsContext || '暂无数据'}
 
-${isHorror ? `## 重要提示
-- 请仅根据上面提供的游戏标题和游戏简介来分析这款游戏，不要引用、对比或提及其他未在简介中出现的游戏作品（如寂静岭、生化危机等）。
-- 如果你不熟悉这款游戏，请基于提供的简介内容进行推断分析，不要臆想游戏的具体内容或机制。
-- 所有建议都必须针对这款具体游戏，而不是泛泛的恐怖游戏通用建议。
-` : ''}
-## 请评估这个制作思路
+${groundingPrompt}## 请评估这个制作思路
 请从以下角度分析：
 1. 这个思路是否可行？适合创作者当前阶段吗？
 2. 有哪些亮点和优势？
 3. 有哪些潜在问题或风险？
 4. 如何改进和优化？
 5. 对后续脚本编写有什么具体指导？
+6. 该品类的受众看重什么（${focusList}）？这个思路是否照顾到了？
 
 请严格按以下JSON格式返回，不要有任何其他文字：
 
@@ -228,20 +274,27 @@ export async function suggestScript(
     ? 'B站（3-15分钟长视频，需要深度和节奏感）'
     : '抖音（15-60秒短视频，需要快节奏和高密度）';
 
+  const cat = getCategory(category);
+  const focusList = cat.aiFocus.length ? cat.aiFocus.join('、') : '内容可看性与热点契合度';
+
   const prompt = `你是一个B站和抖音游戏视频脚本专家。请根据以下信息给出脚本建议。
 
 ## 视频信息
 选题: ${topicTitle}
-分类: ${category === 'card' ? '卡牌游戏' : '恐怖游戏'}
+分类: ${cat.label}
 平台: ${platformDesc}
 版本: ${version === 'long' ? '长版' : '短版'}
 当前标题: ${scriptTitle || '未设定'}
 开场钩子: ${hook || '未设定'}
 
+## 品类画像（受众与关注点）
+${categoryBrief(category)}
+
 ## 当前脚本内容
 ${scriptContent}
 
 ## 请给出建议
+请结合该品类受众的关注点（${focusList}）给出建议，标题风格参考：${cat.titleStyle || '按平台惯例'}
 请严格按以下JSON格式返回，不要有任何其他文字：
 
 {
@@ -279,7 +332,7 @@ ${scriptContent}
 }
 
 /**
- * 评估恐怖游戏视频标题的可行性，并给出吸睛备选标题
+ * 评估视频标题的可行性，并给出吸睛备选标题（品类由 category 决定，文案取自 config/categories.ts）
  */
 export async function evaluateScriptTitle(
   gameTitle: string,
@@ -295,31 +348,34 @@ export async function evaluateScriptTitle(
     throw new Error('请先输入视频标题');
   }
 
+  const cat = getCategory(category);
   const recentNews = db.getNews()
-    .filter((n) => n.category === 'horror')
+    .filter((n) => n.category === cat.id)
     .slice(0, 5);
   const newsContext = recentNews
     .map((n) => `- ${n.title}（${n.metrics?.views ? n.metrics.views + '播放' : ''}）`)
     .join('\n');
 
-  const prompt = `你是B站和抖音恐怖游戏视频的标题优化专家，擅长写出高点击率、吸睛但不标题党的视频标题。
+  const prompt = `你是B站和抖音${cat.label}视频的标题优化专家，擅长写出高点击率、吸睛但不标题党的视频标题。
 
 ## 游戏信息
 游戏标题: ${gameTitle}
 游戏简介: ${gameDescription || '暂无'}
-分类: ${category === 'horror' ? '恐怖游戏' : '卡牌游戏'}
+分类: ${cat.label}
+
+## 品类画像（受众与关注点）
+${categoryBrief(category)}
 
 ## 创作者的视频标题
 ${scriptTitle}
 
-## 最近恐怖游戏热门视频标题参考
+## 最近${cat.label}热门视频标题参考
 ${newsContext || '暂无数据'}
-
+${needsGameGrounding(category, gameDescription) ? `
 ## 重要提示
-- 请仅根据上面提供的游戏标题和游戏简介来分析这款游戏，不要引用、对比或提及其他未在简介中出现的游戏作品（如寂静岭、生化危机、逃生等）。
-- 如果你不熟悉这款游戏，请基于提供的简介内容进行推断分析，不要臆想游戏的具体内容或机制。
+${groundedConstraint(category)}
 - 备选标题必须与这款具体游戏相关，不要出现其他游戏的名字。
-
+` : ''}
 ## 请评估这个标题
 从以下角度分析：
 1. 这个标题是否吸睛？能否在前3秒抓住观众注意力？
@@ -365,6 +421,76 @@ ${newsContext || '暂无数据'}
  * 批量翻译英文标题为中文
  * 仅翻译主要含英文字符的标题，中文标题跳过
  */
+async function translateBatch(
+  batch: { id: string; title: string }[],
+  temperature: number,
+): Promise<Map<string, string>> {
+  const titles = batch.map((t, i) => `${i + 1}. ${t.title}`).join('\n');
+
+  const prompt = `你是一个游戏新闻翻译助手。请将以下英文游戏新闻标题翻译成简洁流畅的中文。
+保持游戏术语的准确性（如游戏名、专业术语保留原名或用通用译名）。
+只返回翻译结果，每行一个，格式为 "序号. 中文翻译"，不要添加任何解释或额外文字。
+每一条都必须根据该条自身的英文标题独立翻译，严禁复用其他条的翻译结果。
+
+${titles}`;
+
+  const client = getClient();
+  const response = await client.chat.completions.create({
+    model: 'deepseek-chat',
+    messages: [{ role: 'user', content: prompt }],
+    temperature,
+    max_tokens: 2000,
+  });
+
+  const content = response.choices[0]?.message?.content || '';
+  const map = new Map<string, string>();
+
+  const lines = content.split('\n');
+  for (const line of lines) {
+    const match = line.match(/^(\d+)\.\s*(.+)/);
+    if (match) {
+      const idx = parseInt(match[1]) - 1;
+      if (idx >= 0 && idx < batch.length) {
+        map.set(batch[idx].id, match[2].trim());
+      }
+    }
+  }
+
+  return map;
+}
+
+async function translateOne(
+  item: { id: string; title: string },
+  temperature: number,
+): Promise<string | null> {
+  const prompt = `你是一个游戏新闻翻译助手。请将下面的英文游戏新闻标题翻译成简洁流畅的中文，保留游戏名/专业术语原名或通用译名。只返回中文翻译本身，不要序号、不要引号、不要任何解释。
+
+"${item.title}"`;
+
+  const client = getClient();
+  const response = await client.chat.completions.create({
+    model: 'deepseek-chat',
+    messages: [{ role: 'user', content: prompt }],
+    temperature,
+    max_tokens: 200,
+  });
+
+  const text = (response.choices[0]?.message?.content || '').trim();
+  return text ? text.replace(/^["'「]|["'」]$/g, '') : null;
+}
+
+// 退化检测：如果某条译文在批次中占比超过一半，说明模型在重复输出
+function isDegenerate(map: Map<string, string>, batchSize: number): boolean {
+  if (batchSize <= 1) return false;
+  const counts = new Map<string, number>();
+  for (const v of map.values()) {
+    counts.set(v, (counts.get(v) || 0) + 1);
+  }
+  let max = 0;
+  for (const c of counts.values()) max = Math.max(max, c);
+  return max / batchSize > 0.5;
+}
+
 export async function translateTitles(items: { id: string; title: string }[]): Promise<Map<string, string>> {
   if (!isAIConfigured()) {
     console.log('[AI] Translation skipped: AI not configured');
@@ -385,39 +511,37 @@ export async function translateTitles(items: { id: string; title: string }[]): P
 
   console.log(`[AI] Translating ${toTranslate.length} English titles...`);
 
-  const titles = toTranslate.map((t, i) => `${i + 1}. ${t.title}`).join('\n');
+  // 小批量 + 退化检测 + 逐条兜底，避免 DeepSeek 对长列表产生重复输出
+  const BATCH_SIZE = 8;
+  const results = new Map<string, string>();
 
-  const prompt = `你是一个游戏新闻翻译助手。请将以下英文游戏新闻标题翻译成简洁流畅的中文。
-保持游戏术语的准确性（如游戏名、专业术语保留原名或用通用译名）。
-只返回翻译结果，每行一个，格式为 "序号. 中文翻译"，不要添加任何解释。
+  for (let i = 0; i < toTranslate.length; i += BATCH_SIZE) {
+    const batch = toTranslate.slice(i, i + BATCH_SIZE);
 
-${titles}`;
-
-  const client = getClient();
-  const response = await client.chat.completions.create({
-    model: 'deepseek-chat',
-    messages: [{ role: 'user', content: prompt }],
-    temperature: 0.3,
-    max_tokens: 2000,
-  });
-
-  const content = response.choices[0]?.message?.content || '';
-  const translations = new Map<string, string>();
-
-  // Parse numbered list
-  const lines = content.split('\n');
-  for (const line of lines) {
-    const match = line.match(/^(\d+)\.\s*(.+)/);
-    if (match) {
-      const idx = parseInt(match[1]) - 1;
-      if (idx >= 0 && idx < toTranslate.length) {
-        translations.set(toTranslate[idx].id, match[2].trim());
+    let map = await translateBatch(batch, 0.3);
+    if (isDegenerate(map, batch.length)) {
+      console.warn('[AI] Batch degenerate (temp 0.3), retry 0.7');
+      map = await translateBatch(batch, 0.7);
+    }
+    // 仍退化 → 退化为逐条单独翻译（单条不存在列表重复问题）
+    if (isDegenerate(map, batch.length)) {
+      console.warn('[AI] Batch still degenerate, falling back to per-item translation');
+      for (const item of batch) {
+        try {
+          const t = await translateOne(item, 0.5);
+          if (t) map.set(item.id, t);
+          await new Promise((r) => setTimeout(r, 150)); // 避免触发速率限制
+        } catch (e) {
+          console.error('[AI] Per-item translation failed:', e);
+        }
       }
     }
+
+    for (const [id, val] of map) results.set(id, val);
   }
 
-  console.log(`[AI] Translated ${translations.size} titles`);
-  return translations;
+  console.log(`[AI] Translated ${results.size}/${toTranslate.length} titles`);
+  return results;
 }
 
 export async function generateScriptDraft(
@@ -432,7 +556,7 @@ export async function generateScriptDraft(
     throw new Error('AI 未配置，请在 .env 中设置 DEEPSEEK_API_KEY');
   }
 
-  const isCard = category === 'card';
+  const cat = getCategory(category);
   const isBilibili = platform === 'bilibili';
   const isLong = version === 'long';
 
@@ -443,25 +567,33 @@ export async function generateScriptDraft(
     ? `\n## 创作者的制作思路（请务必参考这个方向来生成脚本）\n${productionIdea}\n`
     : '';
 
-  const gameInfoSection = !isCard && gameDescription && gameDescription.trim()
+  // 有没有游戏简介就带不带，不再按品类判断
+  const gameInfoSection = gameDescription && gameDescription.trim()
     ? `\n## 游戏简介\n${gameDescription}\n`
     : '';
 
-  const horrorConstraint = !isCard
+  const groundingConstraint = needsGameGrounding(category, gameDescription)
     ? `\n## 重要提示\n- 请仅根据上面提供的游戏标题和简介来生成脚本，不要引用或提及其他未在简介中出现的游戏作品。\n- 脚本中的画面描述和台词必须与这款具体游戏相关。\n`
     : '';
+
+  // 品类脚本要点完全由 config/categories.ts 的 aiPersona / aiFocus / titleStyle 生成
+  const categoryTips = `## ${cat.label}脚本要点
+- 受众特征：${cat.aiPersona || '泛游戏观众'}
+- 内容关注点：${cat.aiFocus.length ? cat.aiFocus.join('、') : '内容可看性与热点契合度'}
+- 标题风格：${cat.titleStyle || '按平台惯例'}
+- 开场3-5秒内必须有能留住观众的钩子`;
 
   const prompt = `你是一个B站和抖音游戏视频脚本专家。请为以下选题生成一个完整的分镜脚本框架。
 
 ## 选题信息
 选题: ${topicTitle}
-分类: ${isCard ? '卡牌游戏' : '恐怖游戏'}
+分类: ${cat.label}
 平台: ${isBilibili ? 'B站' : '抖音'}
 版本: ${isLong ? '长版' : '短版'}
 预计时长: ${duration}
 分镜数量: ${boardCount}个
 ${gameInfoSection}${ideaSection}
-${isCard ? '## 卡牌游戏脚本要点\n- 需要清晰的策略分析\n- 展示卡组构筑思路或对局思路\n- 用数据支撑观点\n- 适合深度内容' : '## 恐怖游戏脚本要点\n- 前几秒必须有强冲击力的画面或声音\n- 情绪节奏：紧张→释放→紧张→高潮\n- 适当加入reaction和吐槽\n- 氛围营造很重要'}${horrorConstraint}
+${categoryTips}${groundingConstraint}
 
 请严格按以下JSON格式返回，不要有任何其他文字：
 
@@ -642,14 +774,15 @@ export async function analyzeMaterialNeeds(
     throw new Error('脚本没有分镜，无法分析素材需求');
   }
 
-  const isHorror = category === 'horror';
+  const cat = getCategory(category);
   const animeInfo = detectAnimeGame(topicTitle);
 
   const storyboardText = storyboards
     .map((b) => `第${b.sceneNumber}镜 (${b.duration}秒): ${b.description} | 台词: ${b.dialogue} | 视觉方向: ${b.visualDirection || '无'}`)
     .join('\n');
 
-  const gameInfoSection = isHorror && gameDescription && gameDescription.trim()
+  // 有简介即注入；是否加「只依据本作」约束由配置驱动（见 needsGameGrounding）
+  const gameInfoSection = gameDescription && gameDescription.trim()
     ? `\n## 游戏简介\n${gameDescription}\n`
     : '';
 
@@ -657,7 +790,7 @@ export async function analyzeMaterialNeeds(
     ? `\n## 创作者的制作思路\n${productionIdea}\n`
     : '';
 
-  const horrorConstraint = isHorror
+  const groundingConstraint = needsGameGrounding(category, gameDescription)
     ? `\n## 重要提示\n- 请仅根据上面提供的游戏标题和简介来分析，不要引用或提及其他未在简介中出现的游戏作品。\n- 所有素材推荐必须与这款具体游戏的相关场景匹配。\n`
     : '';
 
@@ -689,13 +822,14 @@ export async function analyzeMaterialNeeds(
 
 ## 视频信息
 选题: ${topicTitle}
-分类: ${isHorror ? '恐怖游戏' : '卡牌游戏'}
+分类: ${cat.label}
+品类画像: ${describeCategory(category)}
 视频标题: ${scriptTitle || '未设定'}
 开场钩子: ${hook || '无'}
 ${gameInfoSection}${ideaSection}
 ## 脚本分镜
 ${storyboardText}
-${horrorConstraint}${animeSection}
+${groundingConstraint}${animeSection}
 ## 任务
 请为每个分镜分析以下四类素材的需求：
 

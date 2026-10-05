@@ -1,13 +1,20 @@
 const API_BASE = '/api';
 
-function getAuthPassword(): string {
-  return localStorage.getItem('auth_password') || '';
+/** 带 HTTP 状态码与后端业务错误码的错误，便于调用方按 code 分支处理 */
+export class ApiError extends Error {
+  status: number;
+  code?: string;
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.code = code;
+  }
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    'x-auth-password': getAuthPassword(),
   };
 
   if (options?.headers) {
@@ -19,16 +26,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     headers,
   });
 
-  if (resp.status === 401) {
-    // Password invalid, clear and redirect to login
-    localStorage.removeItem('auth_password');
-    window.location.reload();
-    throw new Error('密码错误');
-  }
-
   if (!resp.ok) {
-    const error = await resp.json().catch(() => ({ error: resp.statusText }));
-    throw new Error(error.error || '请求失败');
+    const body = await resp.json().catch(() => ({ error: resp.statusText }));
+    throw new ApiError(body.error || '请求失败', resp.status, body.code);
   }
 
   return resp.json();
@@ -41,7 +41,8 @@ export interface NewsItem {
   url: string;
   source: string;
   sourceType: 'rss' | 'youtube' | 'bilibili' | 'steam';
-  category: 'card' | 'horror' | 'general';
+  // 品类 id 由 config/categories.ts 定义，用 getCategory() 做兜底
+  category: string;
   thumbnail?: string;
   publishedAt: number;
   collectedAt: number;
@@ -105,6 +106,7 @@ export interface TopicEvaluation {
   risks: string;
   bestPlatform: string;
   bestTime: string;
+  evaluatedAt: number;
 }
 
 export interface IdeaEvaluation {
@@ -114,6 +116,7 @@ export interface IdeaEvaluation {
   suggestions: string;
   recommendedApproach: string;
   scriptFocus: string;
+  evaluatedAt: number;
 }
 
 export interface TitleEvaluation {
@@ -122,6 +125,7 @@ export interface TitleEvaluation {
   strengths: string[];
   weaknesses: string[];
   alternativeTitles: string[];
+  evaluatedAt: number;
 }
 
 export interface ScriptSuggestion {
@@ -227,22 +231,21 @@ export const api = {
   // Status
   getStatus: () => request<{ aiConfigured: boolean; accountInfo: AccountInfo }>('/ai/status'),
 
-  // Auth
-  checkPassword: (password: string) =>
-    request<{ success: boolean; configured: boolean }>('/auth/check', {
-      method: 'POST',
-      body: JSON.stringify({ password }),
-    }),
+  // 重新翻译全部新闻标题
+  retranslate: () =>
+    request<{ translated: number; total: number }>('/ai/retranslate', { method: 'POST' }),
 
   // Cloud Sync
-  uploadSync: (data: { topics: any[]; scripts: any[]; uploadedAt: number }) =>
+  // baseUploadedAt: 上次同步到的云端时间戳，用于乐观锁。云端更新时后端返回 409 CONFLICT
+  uploadSync: (data: { topics: any[]; scripts: any[]; uploadedAt: number; baseUploadedAt?: number }) =>
     request<{ success: boolean; uploadedAt: number }>('/sync/upload', {
       method: 'POST',
       body: JSON.stringify(data),
     }),
 
+  // empty: 云端查询成功但无数据（与「查询失败」区分开）
   downloadSync: () =>
-    request<{ topics: any[]; scripts: any[]; uploadedAt: number }>('/sync/download'),
+    request<{ topics: any[]; scripts: any[]; uploadedAt: number; empty?: boolean }>('/sync/download'),
 
   getSyncStatus: () =>
     request<{ syncConfigured: boolean }>('/sync/status'),

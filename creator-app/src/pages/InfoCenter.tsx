@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { api, type NewsItem } from '../api/client';
 import { useTopicStore } from '../store/topicStore';
-import type { GameCategory } from '../types';
+import { NEWS_CATEGORIES, categoryLabel, isCreativeCategory, DEFAULT_CATEGORY } from '../config/categories';
 
 const SOURCE_LABELS: Record<string, string> = {
   rss: 'RSS',
@@ -15,12 +15,6 @@ const SOURCE_COLORS: Record<string, string> = {
   youtube: 'bg-red-50 text-red-700',
   bilibili: 'bg-pink-50 text-pink-700',
   steam: 'bg-blue-50 text-blue-700',
-};
-
-const CATEGORY_LABELS: Record<string, string> = {
-  card: '卡牌游戏',
-  horror: '恐怖游戏',
-  general: '通用',
 };
 
 function formatViews(views?: number): string {
@@ -45,8 +39,9 @@ export default function InfoCenter() {
   const [news, setNews] = useState<NewsItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [collecting, setCollecting] = useState(false);
+  const [retranslating, setRetranslating] = useState(false);
   const [lastCollected, setLastCollected] = useState<number | null>(null);
-  const [filter, setFilter] = useState<'all' | 'card' | 'horror'>('all');
+  const [filter, setFilter] = useState<string>('all');
   const [sourceFilter, setSourceFilter] = useState<'all' | 'youtube' | 'bilibili' | 'rss'>('all');
 
   const loadNews = useCallback(async () => {
@@ -55,7 +50,8 @@ export default function InfoCenter() {
       const data = await api.getNews({
         category: filter === 'all' ? undefined : filter,
         sourceType: sourceFilter === 'all' ? undefined : sourceFilter,
-        limit: 100,
+        // 拉取全部（数据库上限 500），否则较早的 YouTube 等来源会被分页截断看不到
+        limit: 500,
       });
       setNews(data.news);
       setLastCollected(data.lastCollected);
@@ -82,8 +78,24 @@ export default function InfoCenter() {
     }
   };
 
+  const handleRetranslate = async () => {
+    if (!confirm('确定重新翻译全部新闻标题？这会清空现有翻译并重新生成。')) return;
+    setRetranslating(true);
+    try {
+      const result = await api.retranslate();
+      await loadNews();
+      alert(`已重新翻译 ${result.translated}/${result.total} 条标题`);
+    } catch (err) {
+      alert('重新翻译失败: ' + (err as Error).message);
+    } finally {
+      setRetranslating(false);
+    }
+  };
+
   const handleSaveAsTopic = async (item: NewsItem) => {
-    const category = (item.category === 'horror' ? 'horror' : 'card') as GameCategory;
+    // 资讯的品类可能是采集用的「综合资讯」(general)，它不是创作品类。
+    // 存成选题时必须落到一个真正的创作品类，否则看板的品类筛选器里看不到它。
+    const category = isCreativeCategory(item.category) ? item.category : DEFAULT_CATEGORY;
     await addTopic({
       title: item.title,
       category,
@@ -92,6 +104,8 @@ export default function InfoCenter() {
       estimatedViews: 0,
       urgency: 'medium',
       notes: `来源: ${item.source} | ${item.url}`,
+      productionIdea: '',
+      gameDescription: item.summary || '',
     });
     await api.markAsTopic(item.id);
     alert('已保存为选题！');
@@ -103,7 +117,7 @@ export default function InfoCenter() {
         <div>
           <h1 className="text-2xl font-bold text-text">资讯中心</h1>
           <p className="text-text-secondary text-sm mt-1">
-            自动收集卡牌游戏资讯和恐怖游戏热门视频
+            自动收集各品类游戏资讯和热门视频
             {lastCollected && ` | 上次更新: ${timeAgo(lastCollected)}`}
           </p>
         </div>
@@ -114,18 +128,25 @@ export default function InfoCenter() {
         >
           {collecting ? '收集中...' : '立即收集'}
         </button>
+        <button
+          onClick={handleRetranslate}
+          disabled={retranslating}
+          className="bg-surface border border-border text-text-secondary px-4 py-2 rounded-lg text-sm font-medium hover:text-text transition-colors disabled:opacity-50"
+        >
+          {retranslating ? '翻译中...' : '重新翻译'}
+        </button>
       </div>
 
       <div className="flex items-center gap-2 mb-4 flex-wrap">
-        {(['all', 'card', 'horror'] as const).map((f) => (
+        {[{ id: 'all', short: '全部', emoji: '' }, ...NEWS_CATEGORIES].map((c) => (
           <button
-            key={f}
-            onClick={() => setFilter(f)}
+            key={c.id}
+            onClick={() => setFilter(c.id)}
             className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-              filter === f ? 'bg-primary text-white' : 'bg-surface border border-border text-text-secondary hover:text-text'
+              filter === c.id ? 'bg-primary text-white' : 'bg-surface border border-border text-text-secondary hover:text-text'
             }`}
           >
-            {f === 'all' ? '全部' : CATEGORY_LABELS[f]}
+            {c.id === 'all' ? '全部' : `${c.emoji} ${c.short}`}
           </button>
         ))}
         <span className="w-px h-5 bg-border mx-1" />
@@ -175,7 +196,7 @@ export default function InfoCenter() {
                     {SOURCE_LABELS[item.sourceType]}
                   </span>
                   <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-text-secondary">
-                    {CATEGORY_LABELS[item.category]}
+                    {categoryLabel(item.category)}
                   </span>
                   <span className="text-[10px] text-text-secondary">{item.source}</span>
                   {item.metrics?.views ? (

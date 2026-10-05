@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { CATEGORIES, GENERAL_CATEGORY } from '../../config/categories.js';
 import type { NewsItem, NewsCategory } from '../../types.js';
 
 // ─── WBI Signing ───────────────────────────────────────────
@@ -70,28 +71,33 @@ function signWbi(params: Record<string, string | number>, mixinKey: string) {
 // 追热点：最少播放量阈值，低于此值的资讯没有追的价值
 const MIN_VIEWS = 5000;
 
-const HORROR_KEYWORDS = ['恐怖', '惊悚', 'horror', '逃生', '寂静岭', '生化危机', '恐鬼症',
-  '后室', 'five nights', 'fnaf', '零', '凶宅', '怨灵', '鬼', '阴',
-  'outlast', 'amnesia', 'soma', '死亡空间', 'dead space', '恶灵', '黑暗', 'dark',
-  'scary', 'survival', 'resident evil', 'silent hill'];
-
-const CARD_KEYWORDS = ['卡牌', '卡组', '炉石', '游戏王', '万智牌', '影之诗', '七圣召唤',
-  '三国杀', 'hearthstone', 'yugioh', '构筑', 'deck', 'tcg', 'ccg',
-  'slay the spire', '杀戮尖塔', 'mtg', 'artifact', 'lor',
-  'legends of runeterra', '昆特牌', 'gwent', 'marvel snap', 'ptcg', '宝可梦'];
+// 品类分类关键词全部来自 config/categories.ts 的 rssKeywords（单一事实来源），
+// 按 CATEGORIES 声明顺序依次匹配，命中即归入该品类；全部未命中则落桶到 general。
+const CATEGORY_MATCHERS: { id: string; keywords: string[] }[] = CATEGORIES
+  .filter((c) => c.rssKeywords.length > 0)
+  .map((c) => ({ id: c.id, keywords: c.rssKeywords.map((k) => k.toLowerCase()) }));
 
 function categorize(title: string, desc: string): NewsCategory {
   const text = (title + ' ' + desc).toLowerCase();
-  if (CARD_KEYWORDS.some((k) => text.includes(k.toLowerCase()))) return 'card';
-  if (HORROR_KEYWORDS.some((k) => text.includes(k.toLowerCase()))) return 'horror';
-  return 'general';
+  for (const { id, keywords } of CATEGORY_MATCHERS) {
+    if (keywords.some((k) => text.includes(k))) return id;
+  }
+  return GENERAL_CATEGORY.id;
 }
 
-const SEARCH_QUERIES = [
-  '恐怖游戏', '卡牌游戏', '炉石传说', '游戏王',
-  '生化危机', '寂静岭', '恐鬼症', '杀戮尖塔',
-  '三国杀', '后室',
-];
+// 搜索关键词同样从 config/categories.ts 汇总：优先取该品类 newsQueries 里的中文词
+//（更适合 B 站搜索），没有中文词就退化为品类 label。
+// ★ 总量上限：search API 每个关键词一次请求，品类扩到 8 个后需限制请求数，
+//   这里最多 MAX_SEARCH_QUERIES 个关键词，避免采集时间与失败率暴涨。
+const MAX_SEARCH_QUERIES = 16;
+
+function buildSearchQueries(): string[] {
+  const hasCjk = /[\u4e00-\u9fff]/;
+  const queries = CATEGORIES.map((c) => c.newsQueries.find((q) => hasCjk.test(q)) || c.label);
+  return Array.from(new Set(queries)).slice(0, MAX_SEARCH_QUERIES);
+}
+
+const SEARCH_QUERIES = buildSearchQueries();
 
 // ─── Helpers ───────────────────────────────────────────────
 
@@ -155,7 +161,7 @@ async function fetchPopular(): Promise<NewsItem[]> {
       const desc = (video.desc || '').slice(0, 300);
       const category = categorize(title, desc);
 
-      if (category === 'general') continue;
+      if (category === GENERAL_CATEGORY.id) continue;
 
       const item = parseVideo(video, 'B站热门');
       items.push(item);

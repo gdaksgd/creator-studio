@@ -1,4 +1,6 @@
 import RSSParser from 'rss-parser';
+import crypto from 'crypto';
+import { CATEGORIES, GENERAL_CATEGORY } from '../../config/categories.js';
 import type { NewsItem, NewsCategory } from '../../types.js';
 
 const rssParser = new RSSParser({ timeout: 15000 });
@@ -19,31 +21,18 @@ const FEEDS: FeedConfig[] = [
   { url: 'https://www.nintendolife.com/feeds/latest', source: 'Nintendo Life', category: 'general' },
 ];
 
-// Card game patterns
-const CARD_PATTERNS = [
-  /卡牌/, /炉石/, /游戏王/, /万智牌/, /影之诗/, /七圣召唤/, /三国杀/,
-  /hearthstone/i, /yugioh/i, /\bmtg\b/i, /\btcg\b/i, /\bccg\b/i,
-  /trading card/i, /collectible card/i, /slay the spire/i, /杀戮尖塔/,
-  /marvel snap/i, /gwent/i, /昆特牌/, /duel links/i, /master duel/i,
-  /magic:? the gathering/i, /pok[eé]mon tcg/i, /ptcg/i, /宝可梦卡/,
-  /legends of runeterra/i, /卡组/, /构筑/, /artifact(?! intelligence)/i,
-  /shadowverse/i, /card game/i, /卡牌游戏/,
-];
-
-// Horror game patterns
-const HORROR_PATTERNS = [
-  /恐怖/, /惊悚/, /逃生/, /寂静岭/, /生化危机/, /恐鬼症/, /后室/,
-  /\bhorror\b/i, /survival horror/i, /resident evil/i, /silent hill/i,
-  /outlast/i, /phasmophobia/i, /backrooms/i, /five nights/i, /\bfnaf\b/i,
-  /dead space/i, /死亡空间/, /恶灵/, /零:?濡鸦/, /零:?红蝶/,
-  /amnesia:? the/i, /al(?:i|ie)n:? isolation/i, /黑暗.*恐怖/i,
-  /\bscary\b/i, /凶宅/, /怨灵/, /鬼(?!谷)/,
-];
+// 品类分类关键词全部来自 config/categories.ts 的 rssKeywords（单一事实来源），
+// 按 CATEGORIES 的声明顺序依次匹配，命中即归入该品类；全部未命中则落桶到 general。
+const CATEGORY_MATCHERS: { id: string; keywords: string[] }[] = CATEGORIES
+  .filter((c) => c.rssKeywords.length > 0)
+  .map((c) => ({ id: c.id, keywords: c.rssKeywords.map((k) => k.toLowerCase()) }));
 
 function categorize(text: string): NewsCategory {
-  if (CARD_PATTERNS.some((p) => p.test(text))) return 'card';
-  if (HORROR_PATTERNS.some((p) => p.test(text))) return 'horror';
-  return 'general';
+  const lower = text.toLowerCase();
+  for (const { id, keywords } of CATEGORY_MATCHERS) {
+    if (keywords.some((k) => lower.includes(k))) return id;
+  }
+  return GENERAL_CATEGORY.id;
 }
 
 export async function collectRSS(): Promise<NewsItem[]> {
@@ -61,7 +50,7 @@ export async function collectRSS(): Promise<NewsItem[]> {
         const publishedAt = entry.pubDate ? new Date(entry.pubDate).getTime() : Date.now();
 
         items.push({
-          id: `rss_${Buffer.from(entry.link || title).toString('base64').slice(0, 16)}`,
+          id: `rss_${crypto.createHash('sha256').update(entry.link || title).digest('hex').slice(0, 16)}`,
           title,
           summary: summary.slice(0, 300),
           url: entry.link || '',

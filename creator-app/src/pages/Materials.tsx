@@ -2,17 +2,8 @@ import { useEffect, useState } from 'react';
 import { useTopicStore } from '../store/topicStore';
 import { useScriptStore } from '../store/scriptStore';
 import { api } from '../api/client';
-import type { Topic, Script, MaterialPlan, SceneMaterialAnalysis, SceneMaterialCategory, MaterialRecommendation, MaterialType, AnimeSource } from '../types';
-
-const CATEGORY_LABELS: Record<string, string> = {
-  card: '卡牌游戏',
-  horror: '恐怖游戏',
-};
-
-const CATEGORY_COLORS: Record<string, string> = {
-  card: 'bg-amber-50 text-amber-800 border-amber-200',
-  horror: 'bg-purple-50 text-purple-800 border-purple-200',
-};
+import type { Script, MaterialPlan, SceneMaterialAnalysis, SceneMaterialCategory, MaterialRecommendation, MaterialType } from '../types';
+import { categoryBadge, categoryEmoji, categoryLabel } from '../config/categories';
 
 const MATERIAL_META: Record<MaterialType, { label: string; icon: string; color: string; bg: string; border: string; text: string }> = {
   bgm: { label: 'BGM', icon: '🎵', color: 'emerald', bg: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-700' },
@@ -149,8 +140,8 @@ export default function Materials() {
                   className="text-left bg-surface border border-border rounded-xl p-5 hover:border-primary hover:shadow-md transition-all"
                 >
                   <div className="flex items-center gap-2 mb-3">
-                    <span className={`text-xs px-2 py-0.5 rounded-full border ${CATEGORY_COLORS[topic.category]}`}>
-                      {CATEGORY_LABELS[topic.category]}
+                    <span className={`text-xs px-2 py-0.5 rounded-full border ${categoryBadge(topic.category)}`}>
+                      {categoryEmoji(topic.category)} {categoryLabel(topic.category)}
                     </span>
                     {hasPlan && (
                       <span className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200">
@@ -197,8 +188,8 @@ export default function Materials() {
         <div className="flex items-start justify-between gap-4 mb-4">
           <div>
             <div className="flex items-center gap-2 mb-2">
-              <span className={`text-xs px-2 py-0.5 rounded-full border ${CATEGORY_COLORS[selectedTopic.category]}`}>
-                {CATEGORY_LABELS[selectedTopic.category]}
+              <span className={`text-xs px-2 py-0.5 rounded-full border ${categoryBadge(selectedTopic.category)}`}>
+                {categoryEmoji(selectedTopic.category)} {categoryLabel(selectedTopic.category)}
               </span>
             </div>
             <h2 className="text-xl font-bold">{selectedTopic.title}</h2>

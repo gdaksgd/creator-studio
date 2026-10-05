@@ -3,17 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { useTopicStore } from '../store/topicStore';
 import { useScriptStore } from '../store/scriptStore';
 import { api } from '../api/client';
-import type { Topic, GameCategory, TopicStatus, TopicEvaluation, IdeaEvaluation, TitleEvaluation } from '../types';
-
-const CATEGORY_LABELS: Record<GameCategory, string> = {
-  card: '卡牌游戏',
-  horror: '恐怖游戏',
-};
-
-const CATEGORY_COLORS: Record<GameCategory, string> = {
-  card: 'bg-amber-50 text-amber-800 border-amber-200',
-  horror: 'bg-purple-50 text-purple-800 border-purple-200',
-};
+import type { Topic, GameCategory, TopicStatus, TopicEvaluation } from '../types';
+import { CATEGORIES, DEFAULT_CATEGORY, categoryBadge, categoryEmoji, categoryLabel, getCategory } from '../config/categories';
 
 const STATUS_LABELS: Record<TopicStatus, string> = {
   idea: '灵感',
@@ -47,7 +38,7 @@ export default function TopicDashboard() {
   const [filter, setFilter] = useState<'all' | GameCategory>('all');
   const [form, setForm] = useState({
     title: '',
-    category: 'card' as GameCategory,
+    category: DEFAULT_CATEGORY,
     difficulty: 3,
     urgency: 'medium' as 'low' | 'medium' | 'high',
     notes: '',
@@ -79,7 +70,7 @@ export default function TopicDashboard() {
       productionIdea: form.productionIdea,
       gameDescription: form.gameDescription,
     });
-    setForm({ title: '', category: 'card', difficulty: 3, urgency: 'medium', notes: '', productionIdea: '', gameDescription: '' });
+    setForm({ title: '', category: DEFAULT_CATEGORY, difficulty: 3, urgency: 'medium', notes: '', productionIdea: '', gameDescription: '' });
     setShowForm(false);
   };
 
@@ -146,18 +137,28 @@ export default function TopicDashboard() {
         </button>
       </div>
 
-      <div className="flex items-center gap-2 mb-5">
-        {(['all', 'card', 'horror'] as const).map((f) => (
+      <div className="flex items-center gap-2 mb-5 flex-wrap">
+        <button
+          onClick={() => setFilter('all')}
+          className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+            filter === 'all'
+              ? 'bg-primary text-white'
+              : 'bg-surface border border-border text-text-secondary hover:text-text'
+          }`}
+        >
+          全部
+        </button>
+        {CATEGORIES.map((c) => (
           <button
-            key={f}
-            onClick={() => setFilter(f)}
+            key={c.id}
+            onClick={() => setFilter(c.id)}
             className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-              filter === f
+              filter === c.id
                 ? 'bg-primary text-white'
                 : 'bg-surface border border-border text-text-secondary hover:text-text'
             }`}
           >
-            {f === 'all' ? '全部' : CATEGORY_LABELS[f]}
+            {c.emoji} {c.short}
           </button>
         ))}
         <span className="text-xs text-text-secondary ml-auto">{filtered.length} 个选题</span>
@@ -174,40 +175,38 @@ export default function TopicDashboard() {
 
             <label className="block mb-3">
               <span className="text-sm font-medium text-text">
-                {form.category === 'horror' ? '游戏标题' : '选题标题'}
+                {getCategory(form.category).titleLabel}
               </span>
               <input
                 type="text"
                 value={form.title}
                 onChange={(e) => setForm({ ...form, title: e.target.value })}
                 className="w-full mt-1 px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
-                placeholder={form.category === 'horror' ? '比如：青鬼、寂静岭、生化危机...' : '比如：炉石新版本卡组评测...'}
+                placeholder={getCategory(form.category).titlePlaceholder}
                 autoFocus
               />
             </label>
 
-            {form.category === 'horror' ? (
-              <label className="block mb-3">
-                <span className="text-sm font-medium text-text">游戏简介（故事背景、玩法特色、恐怖元素等）</span>
-                <textarea
-                  value={form.gameDescription}
-                  onChange={(e) => setForm({ ...form, gameDescription: e.target.value })}
-                  rows={4}
-                  className="w-full mt-1 px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
-                  placeholder="比如：日本经典恐怖解谜游戏，玩家在被困的废弃学校中寻找出口，途中需要躲避青鬼的追杀。以Jump Scare和心理恐怖著称..."
-                />
-              </label>
-            ) : (
-              <label className="block mb-3">
-                <span className="text-sm font-medium text-text">备注（选题原因、预期效果等）</span>
-                <textarea
-                  value={form.notes}
-                  onChange={(e) => setForm({ ...form, notes: e.target.value })}
-                  rows={2}
-                  className="w-full mt-1 px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
-                />
-              </label>
-            )}
+            <label className="block mb-3">
+              <span className="text-sm font-medium text-text">{getCategory(form.category).descriptionLabel}</span>
+              <textarea
+                value={form.gameDescription}
+                onChange={(e) => setForm({ ...form, gameDescription: e.target.value })}
+                rows={3}
+                className="w-full mt-1 px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
+                placeholder={getCategory(form.category).descriptionPlaceholder}
+              />
+            </label>
+
+            <label className="block mb-3">
+              <span className="text-sm font-medium text-text">备注（选题原因、预期效果等）</span>
+              <textarea
+                value={form.notes}
+                onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                rows={2}
+                className="w-full mt-1 px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
+              />
+            </label>
 
             <div className="grid grid-cols-2 gap-3 mb-3">
               <label className="block">
@@ -217,8 +216,11 @@ export default function TopicDashboard() {
                   onChange={(e) => setForm({ ...form, category: e.target.value as GameCategory })}
                   className="w-full mt-1 px-3 py-2 border border-border rounded-lg text-sm bg-surface focus:outline-none focus:ring-2 focus:ring-primary/20"
                 >
-                  <option value="card">卡牌游戏</option>
-                  <option value="horror">恐怖游戏</option>
+                  {CATEGORIES.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.emoji} {c.label}
+                    </option>
+                  ))}
                 </select>
               </label>
 
@@ -267,9 +269,7 @@ export default function TopicDashboard() {
                 onChange={(e) => setForm({ ...form, productionIdea: e.target.value })}
                 rows={3}
                 className="w-full mt-1 px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
-                placeholder={form.category === 'horror'
-                  ? '比如：从新手视角体验，设定不尖叫挑战，穿插心理学解读...'
-                  : '比如：从新手视角出发，先展示卡组构筑思路，再逐步拆解对局关键回合...'}
+                placeholder="比如：从新手视角体验，设定一个挑战规则，穿插专业背景解读..."
               />
             </label>
 
@@ -309,8 +309,8 @@ export default function TopicDashboard() {
               <div className="flex items-start justify-between gap-4">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1.5">
-                    <span className={`text-xs px-2 py-0.5 rounded-full border ${CATEGORY_COLORS[topic.category]}`}>
-                      {CATEGORY_LABELS[topic.category]}
+                    <span className={`text-xs px-2 py-0.5 rounded-full border ${categoryBadge(topic.category)}`}>
+                      {categoryEmoji(topic.category)} {categoryLabel(topic.category)}
                     </span>
                     <span className={`text-xs px-2 py-0.5 rounded-full ${STATUS_COLORS[topic.status]}`}>
                       {STATUS_LABELS[topic.status]}
@@ -322,13 +322,14 @@ export default function TopicDashboard() {
                     )}
                   </div>
                   <h3 className="font-medium text-text truncate">{topic.title}</h3>
-                  {topic.category === 'horror' && topic.gameDescription ? (
+                  {topic.gameDescription && (
                     <p className="text-xs text-text-secondary mt-1 line-clamp-2">
-                      <span className="font-medium">游戏简介：</span>{topic.gameDescription}
+                      <span className="font-medium">{getCategory(topic.category).descriptionLabel}：</span>{topic.gameDescription}
                     </p>
-                  ) : topic.notes ? (
+                  )}
+                  {topic.notes && (
                     <p className="text-xs text-text-secondary mt-1 line-clamp-2">{topic.notes}</p>
-                  ) : null}
+                  )}
                   {topic.productionIdea && (
                     <p className="text-xs text-blue-600/70 mt-1 line-clamp-2">
                       <span className="font-medium">制作思路：</span>{topic.productionIdea}
@@ -441,6 +442,7 @@ export default function TopicDashboard() {
                     <span className="font-medium text-text">预估播放: </span>
                     <span className="text-text-secondary">{evaluation.estimatedViews}</span>
                   </div>
+
                   <div>
                     <span className="font-medium text-text">推荐平台: </span>
                     <span className="text-text-secondary">{evaluation.bestPlatform}</span>

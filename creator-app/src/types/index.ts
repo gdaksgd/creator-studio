@@ -1,4 +1,7 @@
-export type GameCategory = 'card' | 'horror';
+// 创作品类 ID。
+// ★ 品类清单在 creator-app/src/config/categories.ts 里维护，
+//   新增品类不需要改动这里，用 getCategory() 做运行时回退。
+export type GameCategory = string;
 
 export type TopicStatus = 'idea' | 'researching' | 'approved' | 'scripting' | 'done';
 

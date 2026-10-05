@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { isAIConfigured } from '../config.js';
 import { db } from '../db.js';
-import { evaluateTopic, suggestScript, generateScriptDraft, evaluateProductionIdea, evaluateScriptTitle, analyzeMaterialNeeds } from '../services/aiService.js';
+import { evaluateTopic, suggestScript, generateScriptDraft, evaluateProductionIdea, evaluateScriptTitle, analyzeMaterialNeeds, translateTitles } from '../services/aiService.js';
 import { syncAccount } from '../services/accountSyncService.js';
+import { DEFAULT_CATEGORY } from '../config/categories.js';
 
 const router = Router();
 
@@ -18,7 +19,7 @@ router.post('/evaluate-topic', async (req, res) => {
       return res.status(400).json({ error: '缺少选题标题' });
     }
 
-    const result = await evaluateTopic(topicTitle, category, notes || '', gameDescription);
+    const result = await evaluateTopic(topicTitle, category || DEFAULT_CATEGORY, notes || '', gameDescription);
     res.json(result);
   } catch (err: any) {
     console.error('[AI] Topic evaluation error:', err);
@@ -41,7 +42,7 @@ router.post('/evaluate-idea', async (req, res) => {
       return res.status(400).json({ error: '请先填写制作思路' });
     }
 
-    const result = await evaluateProductionIdea(topicTitle, category || '', productionIdea, gameDescription);
+    const result = await evaluateProductionIdea(topicTitle, category || DEFAULT_CATEGORY, productionIdea, gameDescription);
     res.json(result);
   } catch (err: any) {
     console.error('[AI] Idea evaluation error:', err);
@@ -49,7 +50,7 @@ router.post('/evaluate-idea', async (req, res) => {
   }
 });
 
-// 视频标题评估（恐怖游戏）
+// 视频标题评估（品类由 category 决定，缺省用 DEFAULT_CATEGORY）
 router.post('/evaluate-title', async (req, res) => {
   try {
     if (!isAIConfigured()) {
@@ -64,7 +65,7 @@ router.post('/evaluate-title', async (req, res) => {
       return res.status(400).json({ error: '请先输入视频标题' });
     }
 
-    const result = await evaluateScriptTitle(gameTitle, gameDescription || '', scriptTitle, category || 'horror');
+    const result = await evaluateScriptTitle(gameTitle, gameDescription || '', scriptTitle, category || DEFAULT_CATEGORY);
     res.json(result);
   } catch (err: any) {
     console.error('[AI] Title evaluation error:', err);
@@ -81,7 +82,7 @@ router.post('/script-suggest', async (req, res) => {
 
     const { topicTitle, category, platform, version, scriptTitle, hook, storyboards } = req.body;
     const result = await suggestScript(
-      topicTitle || '', category || '', platform || '', version || '',
+      topicTitle || '', category || DEFAULT_CATEGORY, platform || '', version || '',
       scriptTitle || '', hook || '', storyboards || []
     );
     res.json(result);
@@ -103,7 +104,7 @@ router.post('/generate-script', async (req, res) => {
       return res.status(400).json({ error: '缺少选题标题' });
     }
 
-    const result = await generateScriptDraft(topicTitle, category, platform, version, productionIdea, gameDescription);
+    const result = await generateScriptDraft(topicTitle, category || DEFAULT_CATEGORY, platform, version, productionIdea, gameDescription);
     res.json(result);
   } catch (err: any) {
     console.error('[AI] Script generation error:', err);
@@ -153,7 +154,7 @@ router.post('/materials/analyze', async (req, res) => {
     }
 
     const result = await analyzeMaterialNeeds(
-      topicTitle, category || '', productionIdea || '', gameDescription || '',
+      topicTitle, category || DEFAULT_CATEGORY, productionIdea || '', gameDescription || '',
       scriptTitle || '', hook || '', storyboards
     );
     res.json(result);
@@ -169,6 +170,33 @@ router.get('/status', (req, res) => {
     aiConfigured: isAIConfigured(),
     accountInfo: db.getAccountInfo(),
   });
+});
+
+// 重新翻译全部新闻标题（清掉旧翻译，重新生成）
+router.post('/retranslate', async (req, res) => {
+  try {
+    if (!isAIConfigured()) {
+      return res.status(400).json({ error: 'AI 未配置，请在 server/.env 中设置 DEEPSEEK_API_KEY' });
+    }
+
+    const news = db.getNews();
+    if (news.length === 0) {
+      return res.json({ translated: 0, total: 0 });
+    }
+
+    // 清空旧翻译，全部重新翻译
+    db.clearTranslations();
+    const translations = await translateTitles(
+      news.map((item) => ({ id: item.id, title: item.title })),
+    );
+    if (translations.size > 0) {
+      db.updateTranslations(translations);
+    }
+    res.json({ translated: translations.size, total: news.length });
+  } catch (err: any) {
+    console.error('[AI] Retranslate error:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 export default router;

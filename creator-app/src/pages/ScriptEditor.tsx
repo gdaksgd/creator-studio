@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
 import { useScriptStore } from '../store/scriptStore';
 import { useTopicStore } from '../store/topicStore';
-import { api, type ScriptSuggestion, type TitleEvaluation } from '../api/client';
-import type { Platform, Storyboard, IdeaEvaluation } from '../types';
+import { api, type ScriptSuggestion } from '../api/client';
+import type { Platform, Storyboard, IdeaEvaluation, TitleEvaluation } from '../types';
+import { categoryLabel } from '../config/categories';
 
 const PLATFORM_LABELS: Record<Platform, string> = {
   bilibili: 'B站',
@@ -272,15 +273,13 @@ export default function ScriptEditor() {
         <div className="flex gap-2">
           {selectedScript && currentTopic && (
             <>
-              {currentTopic.category === 'horror' && (
-                <button
-                  onClick={handleEvaluateTitle}
-                  disabled={titleEvalLoading}
-                  className="px-3 py-1.5 text-xs font-medium text-orange-600 border border-orange-200 rounded-lg hover:bg-orange-50 transition-colors disabled:opacity-50"
-                >
-                  {titleEvalLoading ? '分析标题...' : '标题评估'}
-                </button>
-              )}
+              <button
+                onClick={() => handleEvaluateTitle()}
+                disabled={titleEvalLoading}
+                className="px-3 py-1.5 text-xs font-medium text-orange-600 border border-orange-200 rounded-lg hover:bg-orange-50 transition-colors disabled:opacity-50"
+              >
+                {titleEvalLoading ? '分析标题...' : '标题评估'}
+              </button>
               <button
                 onClick={handleAiGenerate}
                 disabled={genLoading}
@@ -372,7 +371,7 @@ export default function ScriptEditor() {
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="text-xs px-2 py-0.5 rounded-full bg-primary-light text-primary-dark">
-                        {currentTopic?.category === 'card' ? '卡牌游戏' : '恐怖游戏'}
+                        {categoryLabel(currentTopic?.category)}
                       </span>
                       <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-text-secondary">
                         {PLATFORM_LABELS[selectedScript.platform]} · {VERSION_LABELS[selectedScript.version]}

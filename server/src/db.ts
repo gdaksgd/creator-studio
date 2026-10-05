@@ -41,7 +41,39 @@ function ensureDB(): void {
     fs.mkdirSync(config.dataDir, { recursive: true });
   }
   if (!fs.existsSync(DB_PATH)) {
-    fs.writeFileSync(DB_PATH, JSON.stringify(defaultDB, null, 2), 'utf-8');
+    atomicWriteFile(DB_PATH, JSON.stringify(defaultDB, null, 2));
+  }
+}
+
+// 原子写入：先写同目录临时文件 -> fsync 落盘 -> rename 覆盖目标。
+// rename 在同一文件系统内是原子的，所以进程崩溃/断电时，
+// db.json 要么是旧的完整内容，要么是新的完整内容，不会出现半截 JSON。
+export function atomicWriteFile(targetPath: string, payload: string): void {
+  const tmpPath = `${targetPath}.tmp`;
+  let fd: number | null = null;
+  try {
+    fd = fs.openSync(tmpPath, 'w');
+    fs.writeFileSync(fd, payload, 'utf-8');
+    // 确保数据真正落到磁盘后再 rename，否则断电时可能 rename 了一个空文件
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = null;
+    fs.renameSync(tmpPath, targetPath);
+  } catch (err) {
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        /* ignore */
+      }
+    }
+    try {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch {
+      /* ignore */
+    }
+    console.error(`[db] atomic write failed for ${targetPath}:`, err);
+    throw err;
   }
 }
 
@@ -50,14 +82,28 @@ function readDB(): DBShape {
   try {
     const raw = fs.readFileSync(DB_PATH, 'utf-8');
     return { ...defaultDB, ...JSON.parse(raw) };
-  } catch {
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[db] readDB failed, falling back to defaults. ${DB_PATH}: ${message}`);
+    // 解析失败（文件损坏/被截断）时先把坏文件改名留存，避免它被下一次写入
+    // 直接覆盖 —— 否则用户的数据就无声消失了。保留现场便于人工恢复。
+    try {
+      if (fs.existsSync(DB_PATH)) {
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const corruptPath = `${DB_PATH}.corrupt-${stamp}`;
+        fs.renameSync(DB_PATH, corruptPath);
+        console.error(`[db] corrupt db.json preserved as ${corruptPath}`);
+      }
+    } catch (backupErr) {
+      console.error('[db] failed to preserve corrupt db.json:', backupErr);
+    }
     return { ...defaultDB };
   }
 }
 
 function writeDB(data: DBShape): void {
   ensureDB();
-  fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2), 'utf-8');
+  atomicWriteFile(DB_PATH, JSON.stringify(data, null, 2));
 }
 
 export const db = {
@@ -103,6 +149,14 @@ export const db = {
   setLastCollected(ts: number): void {
     const data = readDB();
     data.lastCollected = ts;
+    writeDB(data);
+  },
+
+  clearTranslations(): void {
+    const data = readDB();
+    for (const item of data.news) {
+      delete item.translatedTitle;
+    }
     writeDB(data);
   },
 

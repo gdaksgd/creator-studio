@@ -1,4 +1,6 @@
-export type NewsCategory = 'card' | 'horror' | 'general';
+// 资讯品类 ID。
+// ★ 清单在 server/src/config/categories.ts 里维护，新增品类不需要改这里。
+export type NewsCategory = string;
 export type NewsSource = 'rss' | 'youtube' | 'bilibili' | 'steam';
 
 export interface NewsItem {

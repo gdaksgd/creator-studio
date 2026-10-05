@@ -8,7 +8,7 @@ interface TopicStore {
   loading: boolean;
   loadTopics: () => Promise<void>;
   addTopic: (topic: Omit<Topic, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>;
-  updateTopic: (id: string, updates: Partial<Topic>) => Promise<void>;
+  updateTopic: (id: string, updates: Partial<Topic>) => void;
   deleteTopic: (id: string) => Promise<void>;
   getTopicsByCategory: (category: GameCategory) => Topic[];
   getTopicsByStatus: (status: TopicStatus) => Topic[];
@@ -36,14 +36,17 @@ export const useTopicStore = create<TopicStore>((set, get) => ({
     scheduleSyncUpload();
   },
 
-  updateTopic: async (id, updates) => {
-    await db.topics.update(id, { ...updates, updatedAt: Date.now() });
+  updateTopic: (id, updates) => {
+    const now = Date.now();
+    // 先同步更新内存，保证中文输入（IME 组字）时受控 value 即时回显，
+    // 避免 await 延迟导致重渲染用旧值覆盖正在拼写的输入框。
     set((s) => ({
       topics: s.topics.map((t) =>
-        t.id === id ? { ...t, ...updates, updatedAt: Date.now() } : t
+        t.id === id ? { ...t, ...updates, updatedAt: now } : t
       ),
     }));
-    scheduleSyncUpload();
+    // 持久化改为 fire-and-forget，不阻塞 UI
+    void db.topics.update(id, { ...updates, updatedAt: now }).then(() => scheduleSyncUpload());
   },
 
   deleteTopic: async (id) => {

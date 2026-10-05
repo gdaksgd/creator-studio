@@ -2,6 +2,14 @@
 server/node_modules/
 creator-app/node_modules/
 
+# Bundled binaries (83MB node.exe + 52MB cloudflared.exe) — too large for GitHub.
+# See README「本地运行」: install Node yourself, and download cloudflared separately.
+tools/node/
+tools/cloudflared/
+
+# Personal notes (not part of the deliverable)
+B站账号运营方案/
+
 # Build output
 server/dist/
 server/public/
@@ -12,6 +20,11 @@ server/.env
 
 # Data
 server/data/
+backups/
+
+# Runtime
+*.pid
+logs/
 
 # OS files
 .DS_Store
