@@ -419,10 +419,23 @@ export default function ScriptEditor() {
               </div>
 
               {/* M4：平台适配检查（纯规则引擎；同一份脚本在 B站/抖音 的结论不同） */}
+              {/* key=脚本 id：切换脚本时重建面板，避免上一条脚本的封面文案串到新脚本 */}
+              {/* saved/onSave：面板里手填的内容跟着脚本一起落库 + 云同步，关掉页面重开不丢 */}
               <PlatformCheckPanel
+                key={selectedScript.id}
                 platform={selectedScript.platform}
                 title={selectedScript.title}
                 durationSec={totalDuration}
+                saved={selectedScript.platformCheck}
+                onSave={(patch) =>
+                  updateScript(selectedScript.id, {
+                    platformCheck: {
+                      ...(selectedScript.platformCheck ?? { coverText: '' }),
+                      ...patch,
+                      updatedAt: Date.now(),
+                    },
+                  })
+                }
               />
 
               <div className="bg-surface border border-border rounded-xl p-4">

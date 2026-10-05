@@ -362,6 +362,11 @@ export interface Script {
   notes: string;
   createdAt: number;
   updatedAt: number;
+  /**
+   * 平台适配检查面板里手填的内容（封面文案 / CTR / 完播率 / 更新频率）。
+   * 随脚本一起落 IndexedDB 并参与云同步，所以关掉页面、重开这条脚本都不会丢。
+   */
+  platformCheck?: PlatformCheckInput;
 }
 
 // ───────────────────────── M4 · 平台适配检查（纯规则引擎，与 server/src/services/platformRules.ts 对应） ─────────────────────────
@@ -419,4 +424,16 @@ export interface CoverCheckResponse {
   aiUsed: boolean;
   ai?: CoverPolishResult;
   aiError?: string;
+}
+
+/**
+ * 用户在「平台适配检查」面板里手填、需要长期保存的内容。
+ * updatedAt 用于在界面上显示「上次填写时间」，也让云同步能判断新旧。
+ */
+export interface PlatformCheckInput {
+  coverText: string;
+  ctr?: number;
+  completionRate?: number;
+  postsPerWeek?: number;
+  updatedAt: number;
 }

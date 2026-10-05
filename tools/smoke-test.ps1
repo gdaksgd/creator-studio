@@ -312,6 +312,27 @@ function Test-Site {
     Write-Check 'cover refuses to guess' `
                 (($coverBad.Status -eq 400) -and ($coverBad.Body -match '"code"\s*:\s*"BAD_INPUT"') -and $noneInfo) `
                 "unknown platform -> HTTP $($coverBad.Status); no cover text -> info+source=$noneInfo"
+
+    # M4 fix: the panel re-checks while you type, so the pure-rule endpoint must NOT
+    # sit behind the 20/min AI limiter (each pause fires bilibili + douyin).
+    $coverLimit = 0
+    $coverHdr = Invoke-Probe "$Root/api/ai/evaluate-cover" -WithHeaders -JsonBody '{"platform":"bilibili","title":"typing"}'
+    if ($coverHdr.Headers -match 'X-RateLimit-Limit:\s*(\d+)') { $coverLimit = [int] $Matches[1] }
+    Write-Check 'cover route has wide own throttle' `
+                (($coverHdr.Status -eq 200) -and ($coverLimit -ge 100)) `
+                "X-RateLimit-Limit: $coverLimit (the AI route itself stays at 20)"
+
+    # Before the fix, checking more than 20 times a minute returned 429 and the
+    # panel silently stopped updating. 25 back-to-back checks must all pass.
+    $burstOk = 0
+    $burstBad = 0
+    foreach ($i in 1..25) {
+        $b = Invoke-Probe "$Root/api/ai/evaluate-cover" -JsonBody '{"platform":"douyin","title":"typing burst","coverText":"from zero"}'
+        if ($b.Status -eq 200) { $burstOk++ } else { $burstBad++ }
+    }
+    Write-Check 'cover checks survive typing burst' `
+                (($burstOk -eq 25) -and ($burstBad -eq 0)) `
+                "25 rapid checks (old AI cap was 20/min): 200=$burstOk, other=$burstBad"
 }
 
 Write-Host ''

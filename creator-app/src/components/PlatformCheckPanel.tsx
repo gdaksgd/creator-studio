@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api/client';
-import type { Platform, PlatformCheck, RuleStatus, EvidenceLevel, CoverPolishResult } from '../types';
+import type { Platform, PlatformCheck, PlatformCheckInput, RuleStatus, EvidenceLevel, CoverPolishResult } from '../types';
 
 /**
  * M4 · 平台适配检查面板
@@ -52,18 +52,41 @@ function EvidenceLine({ evidence }: { evidence: { source: string; level: Evidenc
   );
 }
 
+/** 把时间戳显示成 月-日 时:分:秒（本地时区），用于「上次填写」提示 */
+function fmtTime(ts: number): string {
+  const d = new Date(ts);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getMonth() + 1}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+/** 停手多久复查 —— 实时感与限流之间的折中 */
+const CHECK_DEBOUNCE_MS = 400;
+/** 两次复查的最小间隔：后端给纯规则检查开了 120/min 的宽松档，正常输入不会碰到限流 */
+const CHECK_MIN_INTERVAL_MS = 1500;
+
 interface PlatformCheckPanelProps {
   /** 脚本自身的平台，作为面板默认选中项 */
   platform: Platform;
   title: string;
   durationSec: number;
+  /** 这条脚本上次保存的手填内容（来自脚本记录，重开还在） */
+  saved?: PlatformCheckInput;
+  /** 把改动写回脚本记录：IndexedDB 落库 + 云同步 */
+  onSave: (patch: Partial<PlatformCheckInput>) => void;
 }
 
-export default function PlatformCheckPanel({ platform, title, durationSec }: PlatformCheckPanelProps) {
-  const [coverText, setCoverText] = useState('');
-  const [ctr, setCtr] = useState('');
-  const [completionRate, setCompletionRate] = useState('');
-  const [postsPerWeek, setPostsPerWeek] = useState('');
+export default function PlatformCheckPanel({ platform, title, durationSec, saved, onSave }: PlatformCheckPanelProps) {
+  // 初始值直接取脚本里存过的内容 —— 这就是「填写好的封面文案重开还在」的关键
+  const [coverText, setCoverText] = useState(() => saved?.coverText ?? '');
+  const [ctr, setCtr] = useState(() => (saved?.ctr != null ? String(saved.ctr) : ''));
+  const [completionRate, setCompletionRate] = useState(() =>
+    saved?.completionRate != null ? String(saved.completionRate) : ''
+  );
+  const [postsPerWeek, setPostsPerWeek] = useState(() =>
+    saved?.postsPerWeek != null ? String(saved.postsPerWeek) : ''
+  );
+  const [savedAt, setSavedAt] = useState<number | null>(saved?.updatedAt ?? null);
+  const [doneAt, setDoneAt] = useState<number | null>(null);
   const [active, setActive] = useState<Platform>(platform);
   const [showMore, setShowMore] = useState(false);
   const [checks, setChecks] = useState<Partial<Record<Platform, PlatformCheck>>>({});
@@ -73,13 +96,31 @@ export default function PlatformCheckPanel({ platform, title, durationSec }: Pla
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
 
+  // 只认最后一次检查的结果，避免旧请求回来覆盖新结果
+  const seqRef = useRef(0);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastRunRef = useRef(0);
+
   useEffect(() => {
     setActive(platform);
   }, [platform]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const toNum = (v: string) => (v.trim() === '' ? undefined : Number(v));
+  const toNum = (v: string): number | undefined => (v.trim() === '' ? undefined : Number(v));
+
+  /** 自动保存：把当前输入写回脚本记录（Dexie + 云同步），不等「填写完毕」也不会丢 */
+  const persist = (next: { coverText?: string; ctr?: string; completionRate?: string; postsPerWeek?: string }) => {
+    onSave({
+      coverText: next.coverText ?? coverText,
+      ctr: toNum(next.ctr ?? ctr),
+      completionRate: toNum(next.completionRate ?? completionRate),
+      postsPerWeek: toNum(next.postsPerWeek ?? postsPerWeek),
+    });
+    setSavedAt(Date.now());
+  };
+
+  /** 按当前输入跑一次检查：同一份脚本 B站 + 抖音一起查，结论并排 */
+  const runCheck = useCallback(async () => {
+    const mySeq = ++seqRef.current;
     const payload = {
       title,
       coverText,
@@ -88,27 +129,56 @@ export default function PlatformCheckPanel({ platform, title, durationSec }: Pla
       completionRate: toNum(completionRate),
       postsPerWeek: toNum(postsPerWeek),
     };
-    // 防抖：标题是逐字输入的，等停手 800ms 再查，避免打满 /api/ai 的分钟限流
-    const timer = setTimeout(async () => {
-      setLoading(true);
-      setError('');
-      try {
-        const [bili, douyin] = await Promise.all([
-          api.evaluateCover({ platform: 'bilibili', ...payload }),
-          api.evaluateCover({ platform: 'douyin', ...payload }),
-        ]);
-        if (!cancelled) setChecks({ bilibili: bili.check, douyin: douyin.check });
-      } catch (e: any) {
-        if (!cancelled) setError(e?.message || '检查失败');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }, 800);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
+    setLoading(true);
+    setError('');
+    try {
+      const [bili, douyin] = await Promise.all([
+        api.evaluateCover({ platform: 'bilibili', ...payload }),
+        api.evaluateCover({ platform: 'douyin', ...payload }),
+      ]);
+      if (mySeq !== seqRef.current) return; // 已有更新的一次检查在跑，丢弃这次结果
+      setChecks({ bilibili: bili.check, douyin: douyin.check });
+    } catch (e: any) {
+      if (mySeq !== seqRef.current) return;
+      const msg = e?.message || '检查失败';
+      setError(
+        /429|too many/i.test(msg)
+          ? '检查太频繁，被限流保护拦了一下，稍等一秒会自动重查（也可以点「填写完毕」立刻重试）'
+          : msg
+      );
+    } finally {
+      if (mySeq === seqRef.current) setLoading(false);
+    }
   }, [title, coverText, durationSec, ctr, completionRate, postsPerWeek]);
+
+  // 输入即复查：停手 400ms 触发一次，且两次之间至少隔 1.5s
+  useEffect(() => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    const wait = Math.max(CHECK_DEBOUNCE_MS, CHECK_MIN_INTERVAL_MS - (Date.now() - lastRunRef.current));
+    timerRef.current = setTimeout(() => {
+      timerRef.current = null;
+      lastRunRef.current = Date.now();
+      void runCheck();
+    }, wait);
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [runCheck]);
+
+  /** 「填写完毕」：不等防抖，马上落库 + 立刻复查一次 */
+  const handleDone = () => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    persist({});
+    setDoneAt(Date.now());
+    lastRunRef.current = Date.now();
+    void runCheck();
+  };
 
   const current = checks[active];
   const other: Platform = active === 'bilibili' ? 'douyin' : 'bilibili';
@@ -168,19 +238,36 @@ export default function PlatformCheckPanel({ platform, title, durationSec }: Pla
         </div>
       </div>
       <p className="text-[11px] text-text-secondary mb-3">
-        同一份脚本，两个平台的结论不一样 —— 在这里切换对比。{loading ? ' 正在检查…' : ''}
+        同一份脚本，两个平台的结论不一样 —— 在这里切换对比。输入就自动复查{loading ? '，正在复查…' : ''}
       </p>
 
-      <label className="block mb-3">
+      <label className="block mb-2">
         <span className="text-xs font-medium text-text">封面文案（封面上要写的那几个字）</span>
         <input
           type="text"
           value={coverText}
-          onChange={(e) => setCoverText(e.target.value)}
+          onChange={(e) => {
+            setCoverText(e.target.value);
+            persist({ coverText: e.target.value });
+          }}
           placeholder="不填就不会给封面相关的结论"
           className="w-full mt-1 px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
         />
       </label>
+
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <button
+          onClick={handleDone}
+          className="px-3 py-1.5 text-xs font-medium rounded-lg bg-primary text-white hover:opacity-90 transition-opacity"
+        >
+          填写完毕
+        </button>
+        <span className="text-[11px] text-text-secondary">
+          自动保存：填了就存进这条脚本，关掉页面重开也还在
+          {savedAt ? ` · 上次填写 ${fmtTime(savedAt)}` : ''}
+          {doneAt ? (loading ? ' · 已保存，正在复查…' : ` · 已保存并复查（${fmtTime(doneAt)}）`) : ''}
+        </span>
+      </div>
 
       <button
         onClick={() => setShowMore((v) => !v)}
@@ -195,7 +282,10 @@ export default function PlatformCheckPanel({ platform, title, durationSec }: Pla
             <input
               type="number"
               value={ctr}
-              onChange={(e) => setCtr(e.target.value)}
+              onChange={(e) => {
+                setCtr(e.target.value);
+                persist({ ctr: e.target.value });
+              }}
               placeholder="如 4.5"
               className="w-full mt-1 px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
@@ -205,7 +295,10 @@ export default function PlatformCheckPanel({ platform, title, durationSec }: Pla
             <input
               type="number"
               value={completionRate}
-              onChange={(e) => setCompletionRate(e.target.value)}
+              onChange={(e) => {
+                setCompletionRate(e.target.value);
+                persist({ completionRate: e.target.value });
+              }}
               placeholder="如 28"
               className="w-full mt-1 px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
@@ -215,7 +308,10 @@ export default function PlatformCheckPanel({ platform, title, durationSec }: Pla
             <input
               type="number"
               value={postsPerWeek}
-              onChange={(e) => setPostsPerWeek(e.target.value)}
+              onChange={(e) => {
+                setPostsPerWeek(e.target.value);
+                persist({ postsPerWeek: e.target.value });
+              }}
               placeholder="如 2"
               className="w-full mt-1 px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
