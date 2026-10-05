@@ -214,6 +214,13 @@ try {
     '首轮规则结论渲染'
   );
   check('面板首轮就给出规则结论（没有被限流拦住）', !!firstResults, firstResults);
+  check('精简后只剩 4 条能真判断的规则', firstResults.includes('规则：4 条'), firstResults);
+
+  // v1.5.2：只给「参考」、没有分析的规则行与对应输入整体删除，不留死 UI
+  const panelTextNoRows = await evaluate(client, bodyTextExpr);
+  for (const gone of ['填更多', '封面图像', '封面点击率', 'CTR', '更新节奏', '计划更新', '不填就不会给结论']) {
+    check(`面板里已没有「${gone}」`, !panelTextNoRows.includes(gone), panelTextNoRows.includes(gone) ? '仍然出现' : '已移除');
+  }
 
   // 5) 模拟键入：只改输入框，不点任何按钮
   const before = client.events.length;

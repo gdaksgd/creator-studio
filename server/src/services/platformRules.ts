@@ -4,8 +4,10 @@
  * 设计原则（与计划书第 3 节一致）：
  *  1. 每条规则都必须带「出处 + 证据等级」，UI 上必须显示，不得伪装成平台官方基准。
  *  2. 引擎本身不调用 AI：没有 DEEPSEEK_API_KEY 也能给出全部结论（AI 只用于可选的润色）。
- *  3. 拿不到的输入（没填封面文案 / 没填 CTR）就不给结论，返回 info 并说明为什么，
- *     绝不用 0 或占位数字顶替。
+ *  3. 只输出「现在就能判断」的检查：拿不到输入的规则**直接不出现**，不排一行
+ *     「不填就不会给结论」的占位文案（v1.5.1 及以前会排一行 info 占位，用户反馈那是噪音，v1.5.2 删）。
+ *  4. 发布后才知道的指标（CTR / 完播率 / 更新频率）不属于「写脚本时的平台适配检查」，已整体移除：
+ *     这类数字该去看板看。抖音的完播率参考线保留在时长建议里（它按时长给，不需要用户先有数据）。
  *
  * 证据等级：A = 平台官方口径 / 同行评审；B = 第三方大样本；C = 经验帖或本项目自定义（不用于 KPI）。
  */
@@ -55,12 +57,6 @@ export interface PlatformCheckInput {
   coverText?: string;
   /** 预计时长（秒）。不填则跳过时长判断 */
   durationSec?: number;
-  /** 封面点击率（%）。只有 YouTube 有公开基准 */
-  ctr?: number;
-  /** 完播率（%）。只有抖音有第三方分档 */
-  completionRate?: number;
-  /** 计划更新频率（条/周） */
-  postsPerWeek?: number;
 }
 
 export interface PlatformCheck {
@@ -101,32 +97,10 @@ const EV_CHEN: RuleEvidence = {
   source: 'B站 CEO 陈睿公开表态（2023-06 起前台播放量改为「播放分钟数」；2023Q1 UGC 中长视频占播放量 70%）',
   level: 'A',
 };
-const EV_CTR: RuleEvidence = {
-  source: 'YouTube 官方 Help Center（CTR 健康区间 2–10%，4–6% 平均，>10% 优秀，<2% 应重做）',
-  level: 'A',
-  note: '这是 YouTube 的口径；B站/抖音没有公开的 CTR 基准，不能跨平台横比',
-};
-const EV_CTR_METHOD: RuleEvidence = {
-  source: '方法论约束（CTR 随曝光扩大自然下降；不可跨频道/跨赛道横比）',
-  level: 'A',
-};
 const EV_COMPLETION: RuleEvidence = {
   source: '蝉妈妈转述官方定义（抖音完播率：15s >45% / 30s >25% / 1–3min >10% / >3min >5%）',
   level: 'B',
   note: '第三方转述、非官方原文，只作参考区间，不当 KPI',
-};
-const EV_CADENCE: RuleEvidence = {
-  source: '18,000 频道研究（每周 1–2 条并稳定保持该节奏优于堆量）',
-  level: 'B',
-};
-const EV_MORE_VIDEOS: RuleEvidence = {
-  source: '20,000 频道研究（更多视频 ≠ 更多播放）',
-  level: 'B',
-};
-const EV_LEXICON: RuleEvidence = {
-  source: '本项目自定义词表（server/src/services/platformRules.ts）',
-  level: 'C',
-  note: '词表是本工具自己定的，不是平台官方口径；只用来说明「命中了哪一类词」',
 };
 const EV_REVERSE: RuleEvidence = {
   source: '本项目计划书附录 B「反向清单」（封面更清晰 ✗ / 标题情绪拉满 ✗ / 标题党 ✗ / 堆量 ✗）',
@@ -167,7 +141,7 @@ function num(v: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
-// ───────────────────────── 各规则 ─────────────────────────
+// ───────────────────────── 时长建议（面板第一块） ─────────────────────────
 
 function durationAdvice(platform: PlatformId, durationSec?: number): DurationAdvice {
   const target = PLATFORM_DURATION_TARGET[platform];
@@ -232,16 +206,10 @@ function durationAdvice(platform: PlatformId, durationSec?: number): DurationAdv
   };
 }
 
+// ───────────────────────── 各规则 ─────────────────────────
+
+/** 标题：疑问句（贺一、张玮锋 2023，A 级）。没填标题时这条不出现。 */
 function titleQuestionRule(title: string): PlatformRule {
-  if (!title.trim()) {
-    return {
-      id: 'title-question',
-      label: '标题：疑问句',
-      status: 'info',
-      detail: '还没填视频标题，无法判断。',
-      evidence: EV_HE,
-    };
-  }
   const isQuestion = /[?？]/.test(title);
   return {
     id: 'title-question',
@@ -255,11 +223,9 @@ function titleQuestionRule(title: string): PlatformRule {
   };
 }
 
+/** 标题：强情绪词（Cui et al. 2024，A 级）。标题堆情绪是负向的，情绪该放到封面。 */
 function titleEmotionRule(title: string): PlatformRule {
   const hits = hitWords(title, EMOTION_WORDS);
-  if (!title.trim()) {
-    return { id: 'title-emotion', label: '标题：强情绪词', status: 'info', detail: '还没填视频标题，无法判断。', evidence: EV_CUI };
-  }
   return {
     id: 'title-emotion',
     label: '标题：强情绪词',
@@ -272,18 +238,9 @@ function titleEmotionRule(title: string): PlatformRule {
   };
 }
 
+/** 封面文案：强情绪（同一条 A 级研究）。没填封面文案时这条不出现。 */
 function coverEmotionRule(coverText: string): PlatformRule {
   const hits = hitWords(coverText, EMOTION_WORDS);
-  if (!coverText.trim()) {
-    return {
-      id: 'cover-emotion',
-      label: '封面文案：强情绪',
-      status: 'info',
-      detail: '还没填封面文案。该项规则需要一个封面文案才能判断——不填就不会给结论。',
-      hint: '填上封面上要写的那几个字（封面文案，不是标题），才能检查这一条。',
-      evidence: EV_CUI,
-    };
-  }
   return {
     id: 'cover-emotion',
     label: '封面文案：强情绪',
@@ -295,123 +252,7 @@ function coverEmotionRule(coverText: string): PlatformRule {
   };
 }
 
-function coverPixelsRule(): PlatformRule {
-  return {
-    id: 'cover-pixels',
-    label: '封面图像：对比度/亮度',
-    status: 'info',
-    detail:
-      '这条规则无法自动检查：本工具只读文案，不分析图像像素。而研究显示封面的「图像质量」不显著，「色彩/亮度」才显著——请自己确认封面在手机小图下是否还看得清。',
-    evidence: EV_HE,
-  };
-}
-
-function ctrRule(ctr?: number): PlatformRule {
-  if (ctr === undefined) {
-    return {
-      id: 'ctr-reference',
-      label: '封面点击率（CTR）',
-      status: 'info',
-      detail: '没有填 CTR 就不给结论（不编数字）。如果后台有封面点击率，填进来可以对照公开区间。',
-      evidence: EV_CTR,
-    };
-  }
-  if (ctr < 2) {
-    return {
-      id: 'ctr-reference',
-      label: '封面点击率（CTR）',
-      status: 'fail',
-      detail: `CTR ${ctr}% 低于 YouTube 官方给的 2% 下限：按官方口径属于「封面/标题该重做」。`,
-      hint: '一次只改一个变量（先换封面，再改标题），否则分不清是哪个起的作用。',
-      evidence: EV_CTR,
-    };
-  }
-  if (ctr > 10) {
-    return {
-      id: 'ctr-reference',
-      label: '封面点击率（CTR）',
-      status: 'info',
-      detail: `CTR ${ctr}% 高于 YouTube 官方的 10% 优秀线。注意：CTR 随曝光扩大自然下降，属于正常现象。`,
-      evidence: EV_CTR,
-    };
-  }
-  return {
-    id: 'ctr-reference',
-    label: '封面点击率（CTR）',
-    status: 'pass',
-    detail: `CTR ${ctr}% 落在 YouTube 官方的健康区间 2–10%（4–6% 为平均）。`,
-    evidence: EV_CTR,
-  };
-}
-
-function cadenceRule(postsPerWeek?: number): PlatformRule {
-  if (postsPerWeek === undefined) {
-    return {
-      id: 'cadence',
-      label: '更新节奏',
-      status: 'info',
-      detail: '没有填计划更新频率，跳过。18,000 频道研究结论是「每周 1–2 条并稳定保持」最佳。',
-      evidence: EV_CADENCE,
-    };
-  }
-  if (postsPerWeek > 2) {
-    return {
-      id: 'cadence',
-      label: '更新节奏',
-      status: 'warn',
-      detail: `每周 ${postsPerWeek} 条高于研究里的 1–2 条：20,000 频道研究显示「更多视频 ≠ 更多播放」，堆量不会带动存量。`,
-      hint: '把精力放在单条质量上；如果是为了测试选题，可以只在固定栏目里加速。',
-      evidence: EV_MORE_VIDEOS,
-    };
-  }
-  if (postsPerWeek < 1) {
-    return {
-      id: 'cadence',
-      label: '更新节奏',
-      status: 'warn',
-      detail: `每周 ${postsPerWeek} 条：研究强调「稳定保持」本身有价值，节奏太稀会让算法拿不到稳定信号。`,
-      evidence: EV_CADENCE,
-    };
-  }
-  return {
-    id: 'cadence',
-    label: '更新节奏',
-    status: 'pass',
-    detail: `每周 ${postsPerWeek} 条，符合 18,000 频道研究里的 1–2 条/周且稳定保持。`,
-    evidence: EV_CADENCE,
-  };
-}
-
-function completionRule(platform: PlatformId, durationSec: number | undefined, completionRate?: number): PlatformRule {
-  if (platform !== 'douyin') {
-    return {
-      id: 'completion-rate',
-      label: '完播率',
-      status: 'info',
-      detail: '完播率分档是抖音的口径；B站按播放分钟数计权（见时长建议），不套用这一条。',
-      evidence: EV_CHEN,
-    };
-  }
-  if (completionRate === undefined) {
-    return {
-      id: 'completion-rate',
-      label: '完播率',
-      status: 'info',
-      detail: '没有填完播率就不给结论。参考线：15 秒 >45% / 30 秒 >25% / 1–3 分钟 >10% / 超过 3 分钟 >5%。',
-      evidence: EV_COMPLETION,
-    };
-  }
-  const threshold = durationSec === undefined ? 10 : durationSec <= 15 ? 45 : durationSec <= 30 ? 25 : durationSec <= 180 ? 10 : 5;
-  return {
-    id: 'completion-rate',
-    label: '完播率',
-    status: completionRate >= threshold ? 'pass' : 'warn',
-    detail: `完播率 ${completionRate}%，对照本时长档的参考线 ${threshold}%：${completionRate >= threshold ? '达标' : '未达标'}。`,
-    hint: completionRate >= threshold ? undefined : '先看前 3 秒是否抓人；如果是中段断崖，问题通常在 30 秒–1 分钟的内容密度。',
-    evidence: EV_COMPLETION,
-  };
-}
-
+/** 反向清单（本项目计划书附录 B，C 级）：标题/封面里有没有明令无效的做法。 */
 function clickbaitRule(title: string, coverText: string): PlatformRule {
   const hits = hitWords(`${title} ${coverText}`, CLICKBAIT_WORDS);
   if (hits.length === 0) {
@@ -433,19 +274,6 @@ function clickbaitRule(title: string, coverText: string): PlatformRule {
   };
 }
 
-function platformCoherenceRule(platform: PlatformId): PlatformRule {
-  return {
-    id: 'platform-coherence',
-    label: '跨平台口径',
-    status: 'info',
-    detail:
-      platform === 'bilibili'
-        ? 'B站计播放分钟数：时长与内容厚度是核心变量。把同一脚本直接搬到抖音（按完播率）通常会吃亏，要单独剪。'
-        : '抖音计完播率：节奏与密度是核心变量。把 B站的长视频直接搬过来通常会掉完播，需要重剪。',
-    evidence: EV_CHEN,
-  };
-}
-
 // ───────────────────────── 主入口 ─────────────────────────
 
 export function checkPlatform(input: PlatformCheckInput): PlatformCheck {
@@ -453,21 +281,20 @@ export function checkPlatform(input: PlatformCheckInput): PlatformCheck {
   const title = (input.title || '').trim();
   const coverText = (input.coverText || '').trim();
   const durationSec = num(input.durationSec);
-  const ctr = num(input.ctr);
-  const completionRate = num(input.completionRate);
-  const postsPerWeek = num(input.postsPerWeek);
 
-  const rules: PlatformRule[] = [
-    titleQuestionRule(title),
-    titleEmotionRule(title),
-    coverEmotionRule(coverText),
-    coverPixelsRule(),
-    ctrRule(ctr),
-    cadenceRule(postsPerWeek),
-    completionRule(platform, durationSec, completionRate),
-    clickbaitRule(title, coverText),
-    platformCoherenceRule(platform),
-  ];
+  // 只放「有输入、能判断」的规则：
+  // 没填标题就不出现标题类规则，没填封面文案就不出现封面色规则——
+  // 界面上因此不会出现「给个参考、其实什么都没说」的行。
+  const rules: PlatformRule[] = [];
+  if (title) {
+    rules.push(titleQuestionRule(title), titleEmotionRule(title));
+  }
+  if (coverText) {
+    rules.push(coverEmotionRule(coverText));
+  }
+  if (title || coverText) {
+    rules.push(clickbaitRule(title, coverText));
+  }
 
   const summary = {
     total: rules.length,
@@ -491,11 +318,3 @@ export function checkPlatform(input: PlatformCheckInput): PlatformCheck {
       '以上全部是「相关性结论 + 本项目自定义阈值」，不是平台算法口径。游戏区没有公开可信的完播率/互动率基准（计划书附录 B 列为 C 级），任何比率都只是参考线，不能当 KPI。',
   };
 }
-
-/** 供 UI 标注：每条规则的证据等级分布 */
-export function evidenceLevels(): EvidenceLevel[] {
-  return ['A', 'B', 'C'];
-}
-
-/** CTR 参考区间（YouTube 官方口径），导出以便 UI 文案与之保持单一事实来源 */
-export const CTR_HEALTHY_RANGE = { min: 2, max: 10, average: [4, 6] as [number, number] };

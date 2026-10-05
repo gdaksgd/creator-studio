@@ -272,7 +272,7 @@ function Test-Site {
         } catch { }
     }
     Write-Check 'cover check runs without AI' `
-                (($cover.Status -eq 200) -and $coverOk -and (-not $coverAiUsed) -and ($coverEngine -eq 'pure-rules-v1') -and ($coverRules -ge 8) -and ($coverSourced -eq $coverTotal)) `
+                (($cover.Status -eq 200) -and $coverOk -and (-not $coverAiUsed) -and ($coverEngine -eq 'pure-rules-v1') -and ($coverRules -eq 4) -and ($coverSourced -eq $coverTotal)) `
                 "HTTP $($cover.Status), engine=$coverEngine, aiUsed=$coverAiUsed, rules=$coverRules, sourced=$coverSourced/$coverTotal"
 
     Write-Check 'cover rules all carry a source' `
@@ -298,20 +298,41 @@ function Test-Site {
                 "bilibili $coverBiliMin-$coverBiliMax pass=$coverBiliPass; douyin $dyMin-$dyMax warn=$dyWarn hint=$dyHint"
 
     # Two things the engine must NOT do: invent a verdict for a platform it does
-    # not know, and guess a cover verdict when no cover text was supplied.
+    # not know, and keep a placeholder row for an input it was never given.
     $coverBad = Invoke-Probe "$Root/api/ai/evaluate-cover" -JsonBody '{"platform":"kuaishou","title":"x","durationSec":300}'
     $coverNone = Invoke-Probe "$Root/api/ai/evaluate-cover" -JsonBody '{"platform":"bilibili","title":"x","durationSec":300}'
-    $noneInfo = $false
+    $noneAbsent = $false
+    $noneRules = -1
     if ($coverNone.Body) {
         try {
             $nj = $coverNone.Body | ConvertFrom-Json
-            $coverRule = @($nj.check.rules | Where-Object { $_.id -eq 'cover-emotion' })[0]
-            $noneInfo = ([string] $coverRule.status -eq 'info') -and [bool] $coverRule.evidence.source
+            $noneRules = @($nj.check.rules).Count
+            $noneAbsent = (@($nj.check.rules | Where-Object { $_.id -eq 'cover-emotion' }).Count -eq 0)
         } catch { }
     }
     Write-Check 'cover refuses to guess' `
-                (($coverBad.Status -eq 400) -and ($coverBad.Body -match '"code"\s*:\s*"BAD_INPUT"') -and $noneInfo) `
-                "unknown platform -> HTTP $($coverBad.Status); no cover text -> info+source=$noneInfo"
+                (($coverBad.Status -eq 400) -and ($coverBad.Body -match '"code"\s*:\s*"BAD_INPUT"') -and $noneAbsent -and ($noneRules -eq 3)) `
+                "unknown platform -> HTTP $($coverBad.Status); no cover text -> cover rule absent, rules=$noneRules"
+
+    # v1.5.2 精简：拿不到输入的规则不再排一行占位，没输入就没有行
+    $coverBare = Invoke-Probe "$Root/api/ai/evaluate-cover" -JsonBody '{"platform":"bilibili"}'
+    $bareRules = -1
+    if ($coverBare.Body) {
+        try { $bareJ = $coverBare.Body | ConvertFrom-Json; $bareRules = @($bareJ.check.rules).Count } catch { }
+    }
+    Write-Check 'no input yields no rule rows (no placeholder)' `
+                (($coverBare.Status -eq 200) -and ($bareRules -eq 0)) `
+                "no title/cover -> rules=$bareRules"
+
+    # 发布后才知道的指标（CTR / 完播率 / 更新频率）已整体移除：payload 里带着也不能多出行
+    $coverLegacy = Invoke-Probe "$Root/api/ai/evaluate-cover" -JsonBody '{"platform":"bilibili","ctr":1.5,"completionRate":30,"postsPerWeek":5}'
+    $legacyRules = -1
+    if ($coverLegacy.Body) {
+        try { $legacyJ = $coverLegacy.Body | ConvertFrom-Json; $legacyRules = @($legacyJ.check.rules).Count } catch { }
+    }
+    Write-Check 'post-publish metrics no longer drive rows' `
+                (($coverLegacy.Status -eq 200) -and ($legacyRules -eq 0)) `
+                "ctr/completionRate/postsPerWeek ignored -> rules=$legacyRules"
 
     # M4 fix: the panel re-checks while you type, so the pure-rule endpoint must NOT
     # sit behind the 20/min AI limiter (each pause fires bilibili + douyin).

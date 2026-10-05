@@ -123,9 +123,6 @@ router.post('/evaluate-cover', async (req, res) => {
       title: body.title,
       coverText: body.coverText,
       durationSec: body.durationSec,
-      ctr: body.ctr,
-      completionRate: body.completionRate,
-      postsPerWeek: body.postsPerWeek,
     });
 
     let aiUsed = false;

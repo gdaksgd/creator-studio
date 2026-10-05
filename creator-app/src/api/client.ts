@@ -315,9 +315,6 @@ export const api = {
     title?: string;
     coverText?: string;
     durationSec?: number;
-    ctr?: number;
-    completionRate?: number;
-    postsPerWeek?: number;
     useAI?: boolean;
   }) =>
     request<CoverCheckResponse>('/ai/evaluate-cover', {

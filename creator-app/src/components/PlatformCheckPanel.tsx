@@ -10,7 +10,9 @@ import type { Platform, PlatformCheck, PlatformCheckInput, RuleStatus, EvidenceL
  *  - 每条规则都显示 evidence.source 与证据等级徽标（A/B/C），不显示出处的结论一律不出现。
  *  - 规则引擎不调 AI：本面板的自动检查只走 /api/ai/evaluate-cover（useAI 不传，不消耗 AI 配额）。
  *    AI 只用于「润色封面文案」，且结果单独标注为 AI 生成。
- *  - 没填的输入（封面文案 / CTR / 完播率 / 更新频率）不给结论，显示「不填就不会给结论」。
+ *  - v1.5.2 精简：只保留「写脚本时就能判断」的检查。没填的输入（标题 / 封面文案）对应的规则
+ *    直接不出现，不再排一行「不填就不会给结论」的占位；发布后才知道的指标（CTR / 完播率 /
+ *    更新频率）已整体删除 —— 这类数字该去看板看，不适合混在脚本期判断里。
  */
 
 const STATUS_STYLE: Record<RuleStatus, { label: string; cls: string }> = {
@@ -78,17 +80,9 @@ interface PlatformCheckPanelProps {
 export default function PlatformCheckPanel({ platform, title, durationSec, saved, onSave }: PlatformCheckPanelProps) {
   // 初始值直接取脚本里存过的内容 —— 这就是「填写好的封面文案重开还在」的关键
   const [coverText, setCoverText] = useState(() => saved?.coverText ?? '');
-  const [ctr, setCtr] = useState(() => (saved?.ctr != null ? String(saved.ctr) : ''));
-  const [completionRate, setCompletionRate] = useState(() =>
-    saved?.completionRate != null ? String(saved.completionRate) : ''
-  );
-  const [postsPerWeek, setPostsPerWeek] = useState(() =>
-    saved?.postsPerWeek != null ? String(saved.postsPerWeek) : ''
-  );
   const [savedAt, setSavedAt] = useState<number | null>(saved?.updatedAt ?? null);
   const [doneAt, setDoneAt] = useState<number | null>(null);
   const [active, setActive] = useState<Platform>(platform);
-  const [showMore, setShowMore] = useState(false);
   const [checks, setChecks] = useState<Partial<Record<Platform, PlatformCheck>>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -105,16 +99,9 @@ export default function PlatformCheckPanel({ platform, title, durationSec, saved
     setActive(platform);
   }, [platform]);
 
-  const toNum = (v: string): number | undefined => (v.trim() === '' ? undefined : Number(v));
-
   /** 自动保存：把当前输入写回脚本记录（Dexie + 云同步），不等「填写完毕」也不会丢 */
-  const persist = (next: { coverText?: string; ctr?: string; completionRate?: string; postsPerWeek?: string }) => {
-    onSave({
-      coverText: next.coverText ?? coverText,
-      ctr: toNum(next.ctr ?? ctr),
-      completionRate: toNum(next.completionRate ?? completionRate),
-      postsPerWeek: toNum(next.postsPerWeek ?? postsPerWeek),
-    });
+  const persist = (next: { coverText?: string }) => {
+    onSave({ coverText: next.coverText ?? coverText });
     setSavedAt(Date.now());
   };
 
@@ -125,9 +112,6 @@ export default function PlatformCheckPanel({ platform, title, durationSec, saved
       title,
       coverText,
       durationSec: durationSec > 0 ? durationSec : undefined,
-      ctr: toNum(ctr),
-      completionRate: toNum(completionRate),
-      postsPerWeek: toNum(postsPerWeek),
     };
     setLoading(true);
     setError('');
@@ -149,7 +133,7 @@ export default function PlatformCheckPanel({ platform, title, durationSec, saved
     } finally {
       if (mySeq === seqRef.current) setLoading(false);
     }
-  }, [title, coverText, durationSec, ctr, completionRate, postsPerWeek]);
+  }, [title, coverText, durationSec]);
 
   // 输入即复查：停手 400ms 触发一次，且两次之间至少隔 1.5s
   useEffect(() => {
@@ -193,9 +177,6 @@ export default function PlatformCheckPanel({ platform, title, durationSec, saved
         title,
         coverText,
         durationSec: durationSec > 0 ? durationSec : undefined,
-        ctr: ctr.trim() === '' ? undefined : Number(ctr),
-        completionRate: completionRate.trim() === '' ? undefined : Number(completionRate),
-        postsPerWeek: postsPerWeek.trim() === '' ? undefined : Number(postsPerWeek),
         useAI: true,
       });
       if (res.aiUsed && res.ai) {
@@ -269,56 +250,6 @@ export default function PlatformCheckPanel({ platform, title, durationSec, saved
         </span>
       </div>
 
-      <button
-        onClick={() => setShowMore((v) => !v)}
-        className="text-[11px] text-text-secondary hover:text-text mb-2"
-      >
-        {showMore ? '− 收起可选项' : '+ 填更多（CTR / 完播率 / 更新频率，都不填也能检查）'}
-      </button>
-      {showMore && (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
-          <label className="block">
-            <span className="text-xs font-medium text-text">封面点击率 CTR(%)</span>
-            <input
-              type="number"
-              value={ctr}
-              onChange={(e) => {
-                setCtr(e.target.value);
-                persist({ ctr: e.target.value });
-              }}
-              placeholder="如 4.5"
-              className="w-full mt-1 px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
-            />
-          </label>
-          <label className="block">
-            <span className="text-xs font-medium text-text">完播率(%)（抖音）</span>
-            <input
-              type="number"
-              value={completionRate}
-              onChange={(e) => {
-                setCompletionRate(e.target.value);
-                persist({ completionRate: e.target.value });
-              }}
-              placeholder="如 28"
-              className="w-full mt-1 px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
-            />
-          </label>
-          <label className="block">
-            <span className="text-xs font-medium text-text">计划更新（条/周）</span>
-            <input
-              type="number"
-              value={postsPerWeek}
-              onChange={(e) => {
-                setPostsPerWeek(e.target.value);
-                persist({ postsPerWeek: e.target.value });
-              }}
-              placeholder="如 2"
-              className="w-full mt-1 px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
-            />
-          </label>
-        </div>
-      )}
-
       {error && <p className="text-xs text-danger mb-3">检查失败：{error}</p>}
 
       {current && (
@@ -356,8 +287,14 @@ export default function PlatformCheckPanel({ platform, title, durationSec, saved
 
           <div className="mt-3 pt-2 border-t border-border">
             <p className="text-[11px] text-text-secondary">
-              规则：{current.summary.total} 条，全部带出处（{current.summary.sourced}/{current.summary.total}）；
-              通过 {current.summary.pass} · 注意 {current.summary.warn} · 不建议 {current.summary.fail} · 参考 {current.summary.info}
+              {current.summary.total > 0 ? (
+                <>
+                  规则：{current.summary.total} 条，全部带出处（{current.summary.sourced}/{current.summary.total}）；
+                  通过 {current.summary.pass} · 注意 {current.summary.warn} · 不建议 {current.summary.fail} · 参考 {current.summary.info}
+                </>
+              ) : (
+                '这里没有需要改的地方：填上视频标题或封面文案才会出现对应检查。'
+              )}
             </p>
           </div>
 

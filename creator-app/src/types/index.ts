@@ -429,11 +429,11 @@ export interface CoverCheckResponse {
 /**
  * 用户在「平台适配检查」面板里手填、需要长期保存的内容。
  * updatedAt 用于在界面上显示「上次填写时间」，也让云同步能判断新旧。
+ *
+ * v1.5.2 起只保留封面文案：CTR / 完播率 / 更新频率是发布后才知道的指标，
+ * 不再在脚本期收集（旧记录里若还留着这几个字段，读的时候忽略、写的时候原样保留）。
  */
 export interface PlatformCheckInput {
   coverText: string;
-  ctr?: number;
-  completionRate?: number;
-  postsPerWeek?: number;
   updatedAt: number;
 }
