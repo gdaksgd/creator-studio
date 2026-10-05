@@ -2,7 +2,7 @@
 #  Creator Studio - AUTO START  (production mode)
 #
 #  Public site : https://creator.creator-app.xyz   (Express :3001)
-#  Local dev   : http://localhost:5173             (Vite, see 启动开发服务器.bat)
+#  Local dev   : http://localhost:5173             (Vite, see start-dev.bat)
 #
 #  Starts: backend (:3001, also serves the built frontend) + Cloudflare tunnel.
 #  Everything runs hidden in the background. Logs -> logs\

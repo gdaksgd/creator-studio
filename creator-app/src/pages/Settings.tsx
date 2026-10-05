@@ -93,7 +93,7 @@ export default function Settings() {
               <li>在 API Keys 页面创建一个新的 Key</li>
               <li>打开 <code className="bg-gray-100 px-1 rounded">D:\自媒体之路\server\.env</code> 文件</li>
               <li>填入: <code className="bg-gray-100 px-1 rounded">DEEPSEEK_API_KEY=你的key</code></li>
-              <li>重启后端服务器（双击 启动开发服务器.bat）</li>
+              <li>重启后端服务器（双击 start-dev.bat）</li>
             </ol>
           </div>
         )}
