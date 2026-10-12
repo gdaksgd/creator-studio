@@ -67,6 +67,7 @@ export default function Settings() {
   // AI 配置：跟着账号走。aiSource 说明这次实际用的是「账号自己的 Key」还是「站点公共配置」
   const [aiSource, setAiSource] = useState<AiKeySource>('none');
   const [aiMasked, setAiMasked] = useState<string | null>(null);
+  const [aiLoaded, setAiLoaded] = useState(false);
   const [aiUpdatedAt, setAiUpdatedAt] = useState<number | null>(null);
   const [aiKeyInput, setAiKeyInput] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
@@ -165,12 +166,8 @@ export default function Settings() {
   };
 
   useEffect(() => {
-    api.getStatus().then((data) => {
-      setAiConfigured(data.aiConfigured);
-      setAiSource(data.aiSource);
-      setYoutubeConfigured(data.youtubeConfigured);
-      setForm(data.accountInfo);
-    }).catch(console.error);
+    // AI / YouTube 状态由下面那个 effect 统一取（它依赖 authToken，挂载时也会跑），这里只取账号信息
+    api.getStatus().then((data) => setForm(data.accountInfo)).catch(console.error);
     api.getSyncStatus().then((data) => setSyncStatus(data.syncConfigured)).catch(() => setSyncStatus(false));
     countDemoData().then(setDemoCount).catch(() => setDemoCount(0));
     setDemoState(getDemoState());
@@ -193,16 +190,19 @@ export default function Settings() {
       setAiUpdatedAt(null);
       setAiKeyInput('');
       setAiMessage(null);
+      setAiLoaded(true);
       return () => { alive = false; };
     }
 
+    setAiLoaded(false);
     api.getAiConfig()
       .then((cfg) => {
         if (!alive) return;
         setAiMasked(cfg.maskedKey);
         setAiUpdatedAt(cfg.updatedAt);
       })
-      .catch(() => { /* 未登录或网络问题：卡片按「站点公共配置」展示 */ });
+      .catch(() => { /* 未登录或网络问题：卡片按「站点公共配置」展示 */ })
+      .finally(() => { if (alive) setAiLoaded(true); });
 
     return () => { alive = false; };
   }, [authToken]);
@@ -572,7 +572,7 @@ export default function Settings() {
             <div className="mt-3.5">
               <StatList>
                 <StatRow label="本账号 Key">
-                  {authToken ? aiMasked ?? '未设置' : '登录后可配置'}
+                  {!authToken ? '登录后可配置' : !aiLoaded ? '读取中…' : aiMasked ?? '未设置'}
                 </StatRow>
                 <StatRow label="视频数据源">
                   <Badge variant={youtubeConfigured ? 'success' : 'neutral'} size="sm">
