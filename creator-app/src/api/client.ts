@@ -20,6 +20,37 @@ export class ApiError extends Error {
   }
 }
 
+// ===== 账号制云端同步：token 存取 =====
+/** token 在 localStorage 里的键名（与后端账号体系约定一致，不要在别处另起名字） */
+export const AUTH_TOKEN_KEY = 'creator-studio-token';
+
+/** 内存缓存，避免每个请求都读 localStorage */
+let authToken: string | null = null;
+
+/** 登录 / 退出时调用：同时更新内存缓存与 localStorage */
+export function setAuthToken(token: string | null): void {
+  authToken = token;
+  try {
+    if (token) localStorage.setItem(AUTH_TOKEN_KEY, token);
+    else localStorage.removeItem(AUTH_TOKEN_KEY);
+  } catch {
+    /* 隐私模式下写不了 localStorage，token 只在本次会话生效 */
+  }
+}
+
+/**
+ * 取当前 token：内存里没有时回读 localStorage。
+ * 这样「刷新页面后、init() 还没跑完」时发出的请求也能带上 Bearer。
+ */
+function readAuthToken(): string | null {
+  if (authToken) return authToken;
+  try {
+    return localStorage.getItem(AUTH_TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -27,6 +58,13 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
   if (options?.headers) {
     Object.assign(headers, options.headers);
+  }
+
+  // 有 token 才注入 Authorization；没有就不加，保持「本地优先」时的旧行为。
+  // 后端对缺/过期 token 的 /sync/upload、/sync/download 会返回 401 UNAUTHORIZED。
+  const token = readAuthToken();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
   }
 
   const resp = await fetch(`${API_BASE}${path}`, {
@@ -204,6 +242,34 @@ export interface SceneMaterialAnalysis {
   animation: SceneMaterialCategory;
 }
 
+// ===== 账号制云端同步类型 =====
+/** 云账号用户（后端 /api/auth/* 返回） */
+export interface AuthUser {
+  id: string;
+  username: string;
+  /** 后端可能给时间戳或 ISO 字符串，前端只展示不参与计算 */
+  createdAt?: number | string;
+}
+
+/** 该账号云端已保存的数据概况（/api/auth/me） */
+export interface CloudUsage {
+  uploadedAt: number;
+  topicCount: number;
+  scriptCount: number;
+}
+
+/** 注册 / 登录成功后的返回 */
+export interface AuthSession {
+  token: string;
+  user: AuthUser;
+}
+
+/** /api/auth/me 的返回 */
+export interface AuthMeResponse {
+  user: AuthUser;
+  cloud: CloudUsage;
+}
+
 export const api = {
   // News
   getNews: (params?: { category?: string; sourceType?: string; limit?: number }) => {
@@ -284,6 +350,21 @@ export const api = {
 
   getSyncStatus: () =>
     request<{ syncConfigured: boolean }>('/sync/status'),
+
+  // Auth（账号制云端同步）
+  // ★ 503 NOT_CONFIGURED = 服务端没配 Supabase，云账号不可用（本地功能不受影响）。
+  // ★ /auth/status 不需要 token，用来判断「云账号是否可用」。
+  authRegister: (data: { username: string; password: string }) =>
+    request<AuthSession>('/auth/register', { method: 'POST', body: JSON.stringify(data) }),
+
+  authLogin: (data: { username: string; password: string }) =>
+    request<AuthSession>('/auth/login', { method: 'POST', body: JSON.stringify(data) }),
+
+  authMe: () => request<AuthMeResponse>('/auth/me'),
+
+  authLogout: () => request<{ success: boolean }>('/auth/logout', { method: 'POST' }),
+
+  getAuthStatus: () => request<{ authConfigured: boolean }>('/auth/status'),
 
   // B站单条视频真实数据：粘贴链接 → 精确取数（用于「记录发布」）
   // ★ 注意：ok=false 时后端依旧返回 200，用 code 区分 BAD_INPUT / NOT_FOUND / RISK_CONTROL / NETWORK。

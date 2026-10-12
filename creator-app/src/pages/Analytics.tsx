@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useId } from 'react';
+import { useEffect, useState, useMemo, lazy, Suspense } from 'react';
 import { api, type AccountInfo, type SyncResult, type SyncHistoryEntry } from '../api/client';
 import { useTopicStore } from '../store/topicStore';
 import { formatDeviation, formatViews } from '../utils/prediction';
@@ -10,6 +10,10 @@ import { Field, Input } from '../components/ui/Input';
 import { SourceNote } from '../components/ui/SourceNote';
 import { Stat } from '../components/ui/Stat';
 import { PageHeader, SectionHeading } from '../components/ui/PageHeader';
+import { Skeleton } from '../components/ui/Skeleton';
+// 只引类型：编译期就被抹掉，不会把 charts.tsx（以及它 import 的 recharts）拉回来
+import type { ComparisonBarsProps, TrendChartProps } from './analytics/charts';
+import { CHART } from './analytics/tokens';
 import {
   Activity,
   Clapperboard,
@@ -22,158 +26,42 @@ import {
   TrendingUp,
   Users,
 } from 'lucide-react';
-import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Legend,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
 
-// ─── Chart Components ──────────────────────────────────────
+// ─── Chart Components（按需加载）────────────────────────────
 
-/** 图表配色全部走 CSS 变量：深浅色主题自动切换，不再写死 hex */
-const CHART = {
-  primary: 'var(--primary)',
-  success: 'var(--success)',
-  warning: 'var(--warning)',
-  danger: 'var(--danger)',
-  info: 'var(--info)',
-  bili: 'var(--accent-bili)',
-  douyin: 'var(--accent-douyin)',
-  grid: 'var(--border)',
-  axis: 'var(--text-muted)',
-} as const;
+// recharts 约 400 kB raw：把它关进独立的 async chunk（charts-*.js），
+// 页面骨架、指标卡与数据请求先渲染完，图表模块下载完再填进 Suspense 的坑位。
+const LazyTrendChart = lazy(() =>
+  import('./analytics/charts').then((m) => ({ default: m.TrendChart })),
+);
+const LazyComparisonBars = lazy(() =>
+  import('./analytics/charts').then((m) => ({ default: m.ComparisonBars })),
+);
 
-/** 坐标轴刻度：统一 11px + 弱化色，避免每张图各写一遍 */
-const AXIS_TICK = { fill: 'var(--text-muted)', fontSize: 11 } as const;
-
-/** 悬停高亮：用最浅的表面色，别用默认的灰色方块 */
-const HOVER_CURSOR = { fill: 'var(--surface-muted)' } as const;
-
-/** Tooltip 做成一张小卡片，和页面里的 card 同一套描边/圆角/阴影 */
-const TOOLTIP_STYLE = {
-  background: 'var(--surface)',
-  border: '1px solid var(--border)',
-  borderRadius: 12,
-  color: 'var(--text)',
-  fontSize: 12,
-  padding: '8px 10px',
-  boxShadow: 'var(--shadow-card)',
-} as const;
-
-/** 把大数字压成「12.3 万」 */
-function compactNum(v: number): string {
-  if (Math.abs(v) >= 100000000) return (v / 100000000).toFixed(1) + ' 亿';
-  if (Math.abs(v) >= 10000) return (v / 10000).toFixed(1) + ' 万';
-  return String(Math.round(v));
-}
-
-/** 趋势图（面积 + 折线）：Recharts 版，带坐标轴与 tooltip */
-function TrendChart({ data, labels, color, height = 180 }: {
-  data: number[];
-  labels: string[];
-  color: string;
-  height?: number;
-}) {
-  const rows = data.map((value, i) => ({ name: labels[i] ?? '#' + (i + 1), value }));
-  // useId 保证同一页面多张面积图的渐变 id 不撞车（撞车会让先渲染的那张变黑）
-  const gradId = 'trend-' + useId().replace(/[^a-zA-Z0-9]/g, '');
-
+/** 骨架与真图同高：图表 chunk 落地时不会把下面的内容顶下去 */
+function ChartSkeleton({ height = 280 }: { height?: number }) {
   return (
     <div className="w-full" style={{ height }}>
-      <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={rows} margin={{ top: 8, right: 10, bottom: 0, left: -14 }}>
-          <defs>
-            <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={color} stopOpacity={0.28} />
-              <stop offset="55%" stopColor={color} stopOpacity={0.08} />
-              <stop offset="100%" stopColor={color} stopOpacity={0} />
-            </linearGradient>
-          </defs>
-          <CartesianGrid stroke={CHART.grid} strokeDasharray="3 6" vertical={false} />
-          <XAxis
-            dataKey="name"
-            tick={AXIS_TICK}
-            tickLine={false}
-            axisLine={false}
-            interval="preserveStartEnd"
-            minTickGap={16}
-          />
-          <YAxis
-            tick={AXIS_TICK}
-            tickLine={false}
-            axisLine={false}
-            width={54}
-            tickFormatter={compactNum}
-          />
-          <Tooltip
-            contentStyle={TOOLTIP_STYLE}
-            itemStyle={{ color: 'var(--text)' }}
-            labelStyle={{ color: 'var(--text-muted)' }}
-            cursor={HOVER_CURSOR}
-            formatter={(v) => compactNum(Number(v))}
-          />
-          <Area
-            type="monotone"
-            dataKey="value"
-            stroke={color}
-            strokeWidth={2}
-            fill={'url(#' + gradId + ')'}
-            dot={false}
-            activeDot={{ r: 5, fill: color, stroke: 'var(--surface)', strokeWidth: 2 }}
-          />
-        </AreaChart>
-      </ResponsiveContainer>
+      <Skeleton className="h-full w-full" />
     </div>
   );
 }
 
-/** 平台对比条：B站 vs 抖音（替换改造前 div 拼的进度条） */
-function ComparisonBars({ items }: {
-  items: { label: string; bili: number; douyin: number; unit?: string }[];
-}) {
-  const rows = items.map(({ label, bili, douyin, unit }) => ({
-    name: unit ? label + '（' + unit + '）' : label,
-    B站: bili,
-    抖音: douyin,
-  }));
-
+/** 趋势图：真身在 ./analytics/charts.tsx，这里只负责 lazy + 占位 */
+function TrendChart({ height = 180, ...props }: TrendChartProps) {
   return (
-    <div className="h-[280px] w-full">
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={rows} margin={{ top: 8, right: 10, bottom: 0, left: -14 }} barGap={3}>
-          <CartesianGrid stroke={CHART.grid} strokeDasharray="3 6" vertical={false} />
-          <XAxis dataKey="name" tick={AXIS_TICK} tickLine={false} axisLine={false} />
-          <YAxis
-            tick={AXIS_TICK}
-            tickLine={false}
-            axisLine={false}
-            width={54}
-            tickFormatter={compactNum}
-          />
-          <Tooltip
-            contentStyle={TOOLTIP_STYLE}
-            itemStyle={{ color: 'var(--text)' }}
-            labelStyle={{ color: 'var(--text-muted)' }}
-            cursor={HOVER_CURSOR}
-            formatter={(v) => compactNum(Number(v))}
-          />
-          <Legend
-            wrapperStyle={{ fontSize: 12, color: 'var(--text-secondary)', paddingTop: 4 }}
-            iconType="circle"
-            iconSize={8}
-          />
-          <Bar dataKey="B站" name="B站" fill={CHART.bili} radius={[6, 6, 0, 0]} maxBarSize={34} />
-          <Bar dataKey="抖音" name="抖音" fill={CHART.douyin} radius={[6, 6, 0, 0]} maxBarSize={34} />
-        </BarChart>
-      </ResponsiveContainer>
-    </div>
+    <Suspense fallback={<ChartSkeleton height={height} />}>
+      <LazyTrendChart height={height} {...props} />
+    </Suspense>
+  );
+}
+
+/** 平台对比条：真身在 ./analytics/charts.tsx，这里只负责 lazy + 占位 */
+function ComparisonBars(props: ComparisonBarsProps) {
+  return (
+    <Suspense fallback={<ChartSkeleton height={280} />}>
+      <LazyComparisonBars {...props} />
+    </Suspense>
   );
 }
 

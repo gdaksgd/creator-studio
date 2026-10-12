@@ -8,6 +8,7 @@ import { EmptyState } from '../components/ui/EmptyState';
 import { PageHeader } from '../components/ui/PageHeader';
 import { LoadingBlock } from '../components/ui/Spinner';
 import { Stat } from '../components/ui/Stat';
+import { cn } from '../utils/cn';
 import { BookmarkPlus, Check, Flame, Languages, Newspaper, Radar, Radio } from 'lucide-react';
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -52,6 +53,25 @@ function timeAgo(ts: number): string {
 
 /** 首屏只铺这么多条：库里最多 500 条，一次全渲染会让首屏很重、滚动条长得没边 */
 const PAGE_SIZE = 24;
+
+/**
+ * 入场动效只给前 8 张卡片。
+ *
+ * 依据：`stagger-children` 会给**每一个**子元素挂 `ui-rise`（opacity + translateY，
+ * 0.5s，fill-mode: both）。合成器要为每个动画元素单独维护一层，首屏 24 张卡片
+ * 同时入场 = 24 个并发合成动画；点几次「显示更多」后可见条数可以到 500，那时就是
+ * 几百个动画同时起跑，滚动/首批绘制会明显掉帧 —— 卡顿感主要来自这里，而不是卡片本身。
+ *
+ * 前 8 项保留动效（延迟公式 0.02 + i*0.04 与 index.css 里
+ * `stagger-children` 前 12 项的节奏一致），第 9 项起直接静态渲染：
+ * 视觉上只是「后面的卡片不再逐条错落」，看不出差别。
+ * 另外 `.card-hover` 只声明 transition，不动画，指针不悬停就没有绘制开销，保持原样。
+ */
+const STAGGER_LIMIT = 8;
+
+const entranceClass = (i: number) => (i < STAGGER_LIMIT ? 'anim-rise' : undefined);
+const entranceDelay = (i: number) =>
+  i < STAGGER_LIMIT ? { animationDelay: `${(0.02 + i * 0.04).toFixed(2)}s` } : undefined;
 
 export default function InfoCenter() {
   const { addTopic } = useTopicStore();
@@ -247,11 +267,15 @@ export default function InfoCenter() {
           description="点击右上角「立即收集」开始抓取，或等待定时自动收集"
         />
       ) : (
-        <div className="stagger-children grid gap-3">
-          {visibleNews.map((item) => (
+        <div className="grid gap-3">
+          {visibleNews.map((item, index) => (
             <article
               key={item.id}
-              className="card card-hover relative flex gap-4 overflow-hidden p-4"
+              className={cn(
+                'card card-hover relative flex gap-4 overflow-hidden p-4',
+                entranceClass(index),
+              )}
+              style={entranceDelay(index)}
             >
               {/* 2px 来源色竖条 */}
               <span
@@ -262,8 +286,12 @@ export default function InfoCenter() {
                 <img
                   src={item.thumbnail}
                   alt=""
+                  width={112}
+                  height={64}
                   className="h-16 w-28 shrink-0 rounded-lg border border-border object-cover"
                   loading="lazy"
+                  decoding="async"
+                  referrerPolicy="no-referrer"
                   onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
                 />
               )}

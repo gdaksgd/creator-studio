@@ -1,5 +1,5 @@
-import { Suspense } from 'react';
-import { NavLink, Outlet } from 'react-router-dom';
+import { Suspense, useEffect, useState } from 'react';
+import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import {
   ChartColumn,
   CloudOff,
@@ -7,14 +7,21 @@ import {
   FileText,
   Images,
   Layers,
+  LogOut,
   Newspaper,
   Settings,
   Sparkles,
+  UserRound,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '../utils/cn';
 import { ThemeToggle } from './ui/ThemeToggle';
 import { LoadingBlock } from './ui/Spinner';
+import { Button } from './ui/Button';
+import { Badge } from './ui/Badge';
+import { useToast } from './ui/Toast';
+import { useAuthStore } from '../services/authService';
+import { setAuthExpiredHandler } from '../services/syncService';
 
 interface NavItem {
   to: string;
@@ -92,6 +99,75 @@ function SidebarLink({ item }: { item: NavItem }) {
   );
 }
 
+/**
+ * 账号入口：未登录给「登录 / 注册」跳设置页，已登录显示用户名 + 退出。
+ * init() 还没跑完（initialized=false）时先不渲染，避免刷新瞬间闪一下「登录 / 注册」。
+ */
+function AccountEntry() {
+  const navigate = useNavigate();
+  const user = useAuthStore((s) => s.user);
+  const token = useAuthStore((s) => s.token);
+  const initialized = useAuthStore((s) => s.initialized);
+  const logout = useAuthStore((s) => s.logout);
+  const [busy, setBusy] = useState(false);
+
+  if (!initialized) return null;
+
+  if (!token) {
+    return (
+      <Button variant="soft" size="sm" onClick={() => navigate('/settings')}>
+        <UserRound className="h-3.5 w-3.5" aria-hidden="true" />
+        登录 / 注册
+      </Button>
+    );
+  }
+
+  const handleLogout = async () => {
+    setBusy(true);
+    try {
+      await logout();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex min-w-0 items-center gap-2">
+      <Badge variant="primary" size="sm" className="max-w-[7.5rem] truncate">
+        {user?.username ?? '已登录'}
+      </Badge>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="shrink-0"
+        loading={busy}
+        onClick={() => void handleLogout()}
+      >
+        <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
+        退出
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * 同步逻辑跑在 React 组件之外（拿不到 useToast），由这里把「登录已过期」
+ * 的提示接到 Toast 上；Layout 是全局唯一实例，注册一次即可。
+ * ★ 除了弹提示，还要把 store 里的登录态一并清掉：syncService 清的是 localStorage
+ *   里的 token，如果不同步 store，界面会继续显示「已登录」而所有同步都在失败。
+ *   token 此时已被清除，所以 refreshMe() 会走「无 token → 清空 user/cloud」的分支。
+ */
+function useAuthExpiredToast() {
+  const toast = useToast();
+  useEffect(() => {
+    setAuthExpiredHandler(() => {
+      void useAuthStore.getState().refreshMe();
+      toast.error('登录已过期，请重新登录');
+    });
+    return () => setAuthExpiredHandler(null);
+  }, [toast]);
+}
+
 function SidebarContent() {
   return (
     <div className="flex h-full flex-col gap-6 px-3 py-5">
@@ -123,6 +199,7 @@ function SidebarContent() {
           <CloudOff className="h-3 w-3" aria-hidden="true" />
           本地优先 · 数据不出本机
         </span>
+        <AccountEntry />
         <div className="flex items-center justify-between gap-2">
           <span className="px-1 text-[11px] text-text-muted">v1.0 · 2026</span>
           <ThemeToggle />
@@ -133,6 +210,8 @@ function SidebarContent() {
 }
 
 export default function Layout() {
+  useAuthExpiredToast();
+
   return (
     <div className="flex min-h-screen bg-bg">
       {/* 桌面端：固定侧边栏（应用型产品的主要"骨架"） */}
@@ -152,7 +231,10 @@ export default function Layout() {
                 Creator Studio
               </span>
             </NavLink>
-            <ThemeToggle />
+            <div className="flex min-w-0 items-center gap-2">
+              <AccountEntry />
+              <ThemeToggle />
+            </div>
           </div>
           <div className="flex gap-1 overflow-x-auto px-3 pb-2.5">
             {ALL_ITEMS.map(({ to, label, Icon, end }) => (

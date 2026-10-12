@@ -4,6 +4,7 @@ import { useScriptStore } from '../store/scriptStore';
 import { api } from '../api/client';
 import type { Script, MaterialPlan, SceneMaterialAnalysis, SceneMaterialCategory, MaterialRecommendation, MaterialType } from '../types';
 import { categoryBadge, categoryEmoji, categoryLabel } from '../config/categories';
+import { cn } from '../utils/cn';
 import { EmptyState } from '../components/ui/EmptyState';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
@@ -19,6 +20,21 @@ const MATERIAL_META: Record<MaterialType, { label: string; icon: string; color: 
   meme: { label: '表情包', icon: '😂', color: 'orange', bg: 'bg-warning-soft', border: 'border-warning/30', text: 'text-warning' },
   animation: { label: '动画素材', icon: '✨', color: 'purple', bg: 'bg-primary-soft', border: 'border-primary/30', text: 'text-primary' },
 };
+
+/**
+ * 入场动效只给列表前 8 项。
+ *
+ * 依据：`stagger-children` 给每个子元素都挂上 `ui-rise`（opacity + translateY，0.5s），
+ * 每个动画元素都要占一层合成，选题数量没有上限（用户数据），几十上百张卡片同时
+ * 起跑会让首屏绘制掉帧。前 8 项保留错落入场（延迟 0.02 + i*0.04，与旧
+ * `stagger-children` 的节奏一致），第 9 项起静态渲染，观感几乎无差别。
+ * `.card-hover` 只声明 transition、不动画，指针不悬停就没有开销，保持原样。
+ */
+const STAGGER_LIMIT = 8;
+
+const entranceClass = (i: number) => (i < STAGGER_LIMIT ? 'anim-rise' : undefined);
+const entranceDelay = (i: number) =>
+  i < STAGGER_LIMIT ? { animationDelay: `${(0.02 + i * 0.04).toFixed(2)}s` } : undefined;
 
 export default function Materials() {
   const { topics, loading, loadTopics, updateTopic } = useTopicStore();
@@ -144,8 +160,8 @@ export default function Materials() {
             description="需要先在选题看板创建选题，并在脚本编辑里加上分镜，这里才能生成素材方案。"
           />
         ) : (
-          <div className="stagger-children grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {topicsWithScripts.map((topic) => {
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {topicsWithScripts.map((topic, index) => {
               const topicScripts = scripts.filter((s) => s.topicId === topic.id && s.storyboards.length > 0);
               const hasPlan = !!topic.materialPlan;
               const selectedCount = topic.materialPlan ? getSelectedCount(topic.materialPlan) : 0;
@@ -158,7 +174,11 @@ export default function Materials() {
                     const firstScript = topicScripts[0];
                     setSelectedScriptId(firstScript?.id || '');
                   }}
-                  className="card card-hover group flex flex-col overflow-hidden p-0 text-left"
+                  className={cn(
+                    'card card-hover group flex flex-col overflow-hidden p-0 text-left',
+                    entranceClass(index),
+                  )}
+                  style={entranceDelay(index)}
                 >
                   {/* 封面位：数据里没有图片字段，用品牌柔光底 + 品类符号做视觉区分，不编造素材图 */}
                   <div className="relative aspect-video overflow-hidden bg-brand-soft">

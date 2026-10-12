@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Database, RefreshCw, Sparkles, Trash2 } from 'lucide-react';
-import { api, type AccountInfo } from '../api/client';
+import { Cloud, Database, LogIn, LogOut, RefreshCw, Sparkles, Trash2, TriangleAlert, UserRound } from 'lucide-react';
+import { api, ApiError, type AccountInfo } from '../api/client';
 import { manualSync } from '../services/syncService';
+import { useAuthStore } from '../services/authService';
+import { useToast } from '../components/ui/Toast';
 import {
   clearDemoData,
   countDemoData,
@@ -15,8 +17,23 @@ import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { Field, Input } from '../components/ui/Input';
 
+/** 时间戳 → 本地时间（账号卡片里的「云端更新时间」） */
+function formatLocalTime(ts?: number): string {
+  if (!ts) return '—';
+  return new Date(ts).toLocaleString('zh-CN');
+}
+
+/** 登录过期（401 / UNAUTHORIZED）不算「同步失败」 */
+function isUnauthorized(err: unknown): boolean {
+  if (err instanceof ApiError && err.status === 401) return true;
+  return typeof err === 'object' && err !== null && (err as { code?: string }).code === 'UNAUTHORIZED';
+}
+
 export default function Settings() {
+  const toast = useToast();
   const [aiConfigured, setAiConfigured] = useState(false);
+  const [authForm, setAuthForm] = useState({ username: '', password: '' });
+  const [authLocalError, setAuthLocalError] = useState('');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -45,6 +62,68 @@ export default function Settings() {
     syncMessage: '',
   });
 
+  const authUser = useAuthStore((s) => s.user);
+  const authToken = useAuthStore((s) => s.token);
+  const authCloud = useAuthStore((s) => s.cloud);
+  const authLoading = useAuthStore((s) => s.loading);
+  const authError = useAuthStore((s) => s.error);
+  const authConfigured = useAuthStore((s) => s.authConfigured);
+  const register = useAuthStore((s) => s.register);
+  const login = useAuthStore((s) => s.login);
+  const logout = useAuthStore((s) => s.logout);
+
+  const refreshDemoCount = async () => {
+    setDemoCount(await countDemoData());
+    setDemoState(getDemoState());
+  };
+
+  /** 改动输入即清掉上一次的错误提示（否则用户改了用户名还看着旧报错） */
+  const updateAuthField = (patch: Partial<{ username: string; password: string }>) => {
+    setAuthLocalError('');
+    if (authError) useAuthStore.setState({ error: '' });
+    setAuthForm((prev) => ({ ...prev, ...patch }));
+  };
+
+  /** 注册 / 登录共用：前端先做一次长度校验，错文案交给 store 按 code 映射 */
+  const handleAuth = async (mode: 'register' | 'login') => {
+    const username = authForm.username.trim();
+    const password = authForm.password;
+    setAuthLocalError('');
+
+    if (!username) {
+      setAuthLocalError('请先填写用户名');
+      return;
+    }
+    if (mode === 'register' && (username.length < 3 || username.length > 24)) {
+      setAuthLocalError('用户名需要 3–24 个字符');
+      return;
+    }
+    if (mode === 'register' && password.length < 6) {
+      setAuthLocalError('密码至少 6 位');
+      return;
+    }
+    if (mode === 'login' && !password) {
+      setAuthLocalError('请先填写密码');
+      return;
+    }
+
+    try {
+      if (mode === 'register') await register(username, password);
+      else await login(username, password);
+      setAuthForm({ username: '', password: '' });
+      // 注册/登录成功会清空演示数据并拉取该账号的云端数据，这里同步刷新卡片上的计数
+      await refreshDemoCount();
+      toast.success(mode === 'register' ? '注册成功，已清空演示数据' : '登录成功');
+    } catch {
+      // 失败文案由 useAuthStore.error 按后端 code 给出（409/401/503/网络），这里不重复提示
+    }
+  };
+
+  const handleLogout = async () => {
+    await logout();
+    toast.info('已退出登录，本地数据不受影响');
+  };
+
   useEffect(() => {
     api.getStatus().then((data) => {
       setAiConfigured(data.aiConfigured);
@@ -62,7 +141,10 @@ export default function Settings() {
       const result = await manualSync();
       setSyncMessage(result.uploaded ? '已上传本地数据到云端' : result.downloaded ? '已从云端恢复数据' : '同步完成');
     } catch (err) {
-      setSyncMessage('同步失败: ' + (err as Error).message);
+      // 401 是「登录过期」而不是网络/服务器问题，给一句能指导操作的文案
+      setSyncMessage(
+        isUnauthorized(err) ? '登录已过期，请重新登录' : '同步失败: ' + (err as Error).message,
+      );
     } finally {
       setSyncing(false);
       setTimeout(() => setSyncMessage(''), 3000);
@@ -128,6 +210,139 @@ export default function Settings() {
       />
 
       <div className="grid gap-5 xl:grid-cols-2 xl:items-start">
+        {/* 账号与云端 */}
+        <Card padding="lg" className="anim-rise">
+          <SectionHeading
+            title="账号与云端"
+            hint="登录后数据跟着账号走，换设备也能恢复"
+            action={
+              authToken ? (
+                <Badge variant="success">已登录</Badge>
+              ) : authConfigured ? (
+                <Badge variant="neutral">未登录</Badge>
+              ) : (
+                <Badge variant="warning">云端未启用</Badge>
+              )
+            }
+          />
+
+          {!authToken ? (
+            <>
+              <p className="mt-3 text-xs leading-relaxed text-text-muted">
+                注册后演示数据会自动清空，云端只保存你自己的数据；
+                <span className="text-text">不注册也能继续本地使用</span>，所有创作数据都留在本机。
+              </p>
+
+              <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                <Field label="用户名" hint="3–24 个字符">
+                  <Input
+                    type="text"
+                    value={authForm.username}
+                    autoComplete="username"
+                    onChange={(e) => updateAuthField({ username: e.target.value })}
+                    placeholder="例如: creator2026"
+                  />
+                </Field>
+                <Field label="密码" hint="至少 6 位">
+                  <Input
+                    type="password"
+                    value={authForm.password}
+                    autoComplete="current-password"
+                    onChange={(e) => updateAuthField({ password: e.target.value })}
+                    placeholder="••••••"
+                  />
+                </Field>
+              </div>
+
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <Button
+                  variant="primary"
+                  size="sm"
+                  loading={authLoading}
+                  onClick={() => void handleAuth('register')}
+                >
+                  <UserRound className="h-3.5 w-3.5" aria-hidden="true" />
+                  注册并开始使用
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={authLoading}
+                  onClick={() => void handleAuth('login')}
+                >
+                  <LogIn className="h-3.5 w-3.5" aria-hidden="true" />
+                  登录
+                </Button>
+              </div>
+
+              {(authLocalError || authError) && (
+                <div className="mt-3 flex items-start gap-2 rounded-lg border border-danger/30 bg-danger-soft px-3 py-2">
+                  <TriangleAlert className="mt-px h-3.5 w-3.5 shrink-0 text-danger" aria-hidden="true" />
+                  <p className="min-w-0 flex-1 text-xs leading-relaxed text-danger">
+                    {authLocalError || authError}
+                  </p>
+                </div>
+              )}
+
+              {!authConfigured && (
+                <p className="mt-3 text-xs leading-relaxed text-text-muted">
+                  服务端未配置云端账号，本地功能不受影响。
+                </p>
+              )}
+            </>
+          ) : (
+            <>
+              <div className="mt-3.5 divide-y divide-border rounded-xl border border-border bg-surface-muted/40 px-3.5">
+                <div className="flex items-center justify-between gap-3 py-2.5">
+                  <span className="text-xs text-text-secondary">登录账号</span>
+                  <span className="num truncate text-xs font-medium text-text">
+                    {authUser?.username ?? '已登录'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-3 py-2.5">
+                  <span className="text-xs text-text-secondary">云端数据</span>
+                  <span className="num text-xs font-medium text-text">
+                    {authCloud ? `${authCloud.topicCount} 个选题 · ${authCloud.scriptCount} 个脚本` : '—'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-3 py-2.5">
+                  <span className="shrink-0 text-xs text-text-secondary">云端更新时间</span>
+                  <span className="num text-xs font-medium text-text">
+                    {formatLocalTime(authCloud?.uploadedAt)}
+                  </span>
+                </div>
+              </div>
+
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  loading={syncing}
+                  disabled={!syncStatus}
+                  onClick={handleManualSync}
+                >
+                  <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                  立即同步
+                </Button>
+                <Button
+                  variant="dangerGhost"
+                  size="sm"
+                  onClick={() => void handleLogout()}
+                >
+                  <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
+                  退出登录
+                </Button>
+                {syncMessage && <span className="text-xs text-text-secondary">{syncMessage}</span>}
+              </div>
+
+              <p className="mt-3 flex items-start gap-1.5 text-xs leading-relaxed text-text-muted">
+                <Cloud className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <span>数据先写本机，再同步到你的账号；退出登录不会删除本机数据。</span>
+              </p>
+            </>
+          )}
+        </Card>
+
         {/* 演示数据 */}
         <Card padding="lg" className="anim-rise">
           <SectionHeading

@@ -9,6 +9,7 @@
 import { db } from '../db';
 import { useTopicStore } from '../store/topicStore';
 import { useScriptStore } from '../store/scriptStore';
+import { hasToken } from './authService';
 import type {
   MaterialPlan,
   PublishedRecord,
@@ -87,6 +88,9 @@ export async function seedDemoData(): Promise<{ topics: number; scripts: number 
  * 这样 HR 打开站点的第一眼看到的不是一片空白。
  */
 export async function ensureDemoData(): Promise<boolean> {
+  // 已登录（有 token）时不再自动播种：登录用户看到自己的空库是正常的，
+  // 演示数据只服务于「没登录、第一次打开」的场景。
+  if (hasToken()) return false;
   if (getDemoState() === 'off') return false;
   const total = await db.topics.count();
   if (total > 0) return false;

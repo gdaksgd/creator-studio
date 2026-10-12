@@ -3,6 +3,7 @@ import { Routes, Route } from 'react-router-dom'
 import Layout from './components/Layout'
 import { syncOnLaunch } from './services/syncService'
 import { ensureDemoData } from './services/demoData'
+import { useAuthStore } from './services/authService'
 // 路由级懒加载：把 Recharts 这类重依赖关进「数据看板」自己的 chunk，
 // 首屏不再为没打开的页面买单（改造前单 chunk 895 kB / gzip 262 kB）
 const TopicDashboard = lazy(() => import('./pages/TopicDashboard'))
@@ -15,9 +16,14 @@ const Settings = lazy(() => import('./pages/Settings'))
 
 function App() {
   useEffect(() => {
-    // 已移除访问门禁：应用启动先触发一次云端同步；
-    // 同步结束后若本地库仍然为空，自动载入演示数据，保证首次打开不是一片空白。
-    void syncOnLaunch()
+    // 启动顺序：① 读 token / 拉 me（账号态）→ ② 云端同步 → ③ 演示数据兜底。
+    // 每一步失败都不能挡住渲染，所以每一段都单独 catch。
+    // ★ ensureDemoData 在已登录时会自己跳过，登录用户看到的空库不会被塞演示数据。
+    void useAuthStore
+      .getState()
+      .init()
+      .catch(() => undefined)
+      .then(() => syncOnLaunch())
       .catch(() => undefined)
       .then(() => ensureDemoData())
       .catch(() => undefined)
