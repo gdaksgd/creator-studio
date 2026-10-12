@@ -1,19 +1,49 @@
 import { Router } from 'express';
-import { isAIConfigured } from '../config.js';
+import { config, isYouTubeConfigured } from '../config.js';
 import { db } from '../db.js';
 import { evaluateTopic, suggestScript, generateScriptDraft, evaluateProductionIdea, evaluateScriptTitle, analyzeMaterialNeeds, translateTitles, polishCoverCopy } from '../services/aiService.js';
 import type { CoverPolishResult } from '../services/aiService.js';
 import { checkPlatform, normalizePlatform } from '../services/platformRules.js';
 import { syncAccount } from '../services/accountSyncService.js';
 import { DEFAULT_CATEGORY } from '../config/categories.js';
+import { optionalAuth } from '../middleware/optionalAuth.js';
+import type { AuthedRequest } from '../middleware/requireAuth.js';
+import { decodeAccountKey } from '../services/aiConfigStore.js';
+import { AI_NOT_CONFIGURED_MESSAGE, hasAiKey, runWithAiKey } from '../services/aiContext.js';
 
 const router = Router();
+
+/** 本次请求实际用的是谁的 Key（只有这里知道，/status 会回给前端） */
+interface AiRequest extends AuthedRequest {
+  aiKeySource?: 'account' | 'server' | 'none';
+}
+
+// 每个 AI 请求先「可选登录」，再把该请求要用的 DeepSeek Key 绑进请求作用域：
+//   已登录且账号里存了 Key → 用账号自己的；否则 → 用 server/.env 的站点公共 Key。
+// 之后 aiService 里任何一层调用 getClient() 拿到的都是这个 Key。
+router.use(optionalAuth);
+router.use((req, _res, next) => {
+  const authed = req as AiRequest;
+  // optionalAuth 刚刚读过云端、账号记录就在手上，直接解密即可：
+  // 既省一次 Supabase 往返，也不会因为读取缓存而看不到刚写进去的 Key。
+  let accountKey = '';
+  if (authed.authUser) {
+    try {
+      accountKey = decodeAccountKey(authed.cloudAccount);
+    } catch (err) {
+      console.warn('[AI] 读取账号 AI Key 失败，退回站点公共 Key:', err instanceof Error ? err.message : err);
+    }
+  }
+  const effective = accountKey || config.deepseekApiKey;
+  authed.aiKeySource = accountKey ? 'account' : config.deepseekApiKey ? 'server' : 'none';
+  runWithAiKey(effective, next);
+});
 
 // 选题评估
 router.post('/evaluate-topic', async (req, res) => {
   try {
-    if (!isAIConfigured()) {
-      return res.status(400).json({ error: 'AI 未配置，请在 server/.env 中设置 DEEPSEEK_API_KEY' });
+    if (!hasAiKey()) {
+      return res.status(400).json({ error: AI_NOT_CONFIGURED_MESSAGE });
     }
 
     const { topicTitle, category, notes, gameDescription } = req.body;
@@ -32,8 +62,8 @@ router.post('/evaluate-topic', async (req, res) => {
 // 制作思路评估
 router.post('/evaluate-idea', async (req, res) => {
   try {
-    if (!isAIConfigured()) {
-      return res.status(400).json({ error: 'AI 未配置，请在 server/.env 中设置 DEEPSEEK_API_KEY' });
+    if (!hasAiKey()) {
+      return res.status(400).json({ error: AI_NOT_CONFIGURED_MESSAGE });
     }
 
     const { topicTitle, category, productionIdea, gameDescription } = req.body;
@@ -55,8 +85,8 @@ router.post('/evaluate-idea', async (req, res) => {
 // 视频标题评估（品类由 category 决定，缺省用 DEFAULT_CATEGORY）
 router.post('/evaluate-title', async (req, res) => {
   try {
-    if (!isAIConfigured()) {
-      return res.status(400).json({ error: 'AI 未配置，请在 server/.env 中设置 DEEPSEEK_API_KEY' });
+    if (!hasAiKey()) {
+      return res.status(400).json({ error: AI_NOT_CONFIGURED_MESSAGE });
     }
 
     const { gameTitle, gameDescription, scriptTitle, category } = req.body;
@@ -78,8 +108,8 @@ router.post('/evaluate-title', async (req, res) => {
 // 脚本建议
 router.post('/script-suggest', async (req, res) => {
   try {
-    if (!isAIConfigured()) {
-      return res.status(400).json({ error: 'AI 未配置，请在 server/.env 中设置 DEEPSEEK_API_KEY' });
+    if (!hasAiKey()) {
+      return res.status(400).json({ error: AI_NOT_CONFIGURED_MESSAGE });
     }
 
     const { topicTitle, category, platform, version, scriptTitle, hook, storyboards } = req.body;
@@ -106,7 +136,8 @@ router.post('/script-suggest', async (req, res) => {
 });
 
 // M4 · 封面 + 平台适配检查
-// 纯规则引擎：没有 DEEPSEEK_API_KEY 也能给出全部结论；AI 仅在 useAI=true 时用于润色文案。
+// 纯规则引擎：没有配置 AI Key 也能给出全部结论；AI 仅在 useAI=true 时用于润色文案。
+// 配置位置：设置页 → AI 配置（账号级）或服务端 .env 的公共 Key。
 router.post('/evaluate-cover', async (req, res) => {
   try {
     const body = req.body || {};
@@ -130,8 +161,8 @@ router.post('/evaluate-cover', async (req, res) => {
     let aiError: string | undefined;
 
     if (body.useAI === true) {
-      if (!isAIConfigured()) {
-        aiError = 'AI 未配置：本次只返回规则结论（在 server/.env 设置 DEEPSEEK_API_KEY 可启用文案润色）';
+      if (!hasAiKey()) {
+        aiError = 'AI 未配置：本次只返回规则结论（在「设置 → AI 配置」填写自己的 DeepSeek Key 可启用文案润色）';
       } else {
         try {
           ai = await polishCoverCopy({
@@ -161,8 +192,8 @@ router.post('/evaluate-cover', async (req, res) => {
 // AI 生成脚本框架
 router.post('/generate-script', async (req, res) => {
   try {
-    if (!isAIConfigured()) {
-      return res.status(400).json({ error: 'AI 未配置，请在 server/.env 中设置 DEEPSEEK_API_KEY' });
+    if (!hasAiKey()) {
+      return res.status(400).json({ error: AI_NOT_CONFIGURED_MESSAGE });
     }
 
     const { topicTitle, category, platform, version, productionIdea, gameDescription } = req.body;
@@ -207,8 +238,8 @@ router.get('/account/history', (req, res) => {
 // 素材工坊 - AI 分析素材需求
 router.post('/materials/analyze', async (req, res) => {
   try {
-    if (!isAIConfigured()) {
-      return res.status(400).json({ error: 'AI 未配置，请在 server/.env 中设置 DEEPSEEK_API_KEY' });
+    if (!hasAiKey()) {
+      return res.status(400).json({ error: AI_NOT_CONFIGURED_MESSAGE });
     }
 
     const { topicTitle, category, productionIdea, gameDescription, scriptTitle, hook, storyboards } = req.body;
@@ -230,10 +261,14 @@ router.post('/materials/analyze', async (req, res) => {
   }
 });
 
-// 检查 AI 配置状态
+// 检查 AI 配置状态（aiSource 告诉前端这次用的是账号 Key 还是站点公共 Key）
 router.get('/status', (req, res) => {
+  const authed = req as AiRequest;
   res.json({
-    aiConfigured: isAIConfigured(),
+    aiConfigured: hasAiKey(),
+    aiSource: authed.aiKeySource ?? (config.deepseekApiKey ? 'server' : 'none'),
+    // YouTube 数据源是站点级公共配置（用户不需要、也不该看到配置方式），这里只回状态
+    youtubeConfigured: isYouTubeConfigured(),
     accountInfo: db.getAccountInfo(),
   });
 });
@@ -241,8 +276,8 @@ router.get('/status', (req, res) => {
 // 重新翻译全部新闻标题（清掉旧翻译，重新生成）
 router.post('/retranslate', async (req, res) => {
   try {
-    if (!isAIConfigured()) {
-      return res.status(400).json({ error: 'AI 未配置，请在 server/.env 中设置 DEEPSEEK_API_KEY' });
+    if (!hasAiKey()) {
+      return res.status(400).json({ error: AI_NOT_CONFIGURED_MESSAGE });
     }
 
     const news = db.getNews();

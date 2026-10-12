@@ -24,7 +24,10 @@
       "passwordHash": "scrypt$16384$8$1$<salt>$<hash>", "createdAt": 1791815206730 }
   ],
   "accounts": {
-    "<userId>": { "topics": [...], "scripts": [...], "uploadedAt": 1791815240671 }
+    "<userId>": {
+      "topics": [...], "scripts": [...], "uploadedAt": 1791815240671,
+      "ai": { "deepseekApiKey": "enc.v1.<iv>.<tag>.<ct>", "updatedAt": 1791816000000 }  // 可选，见第 10 节
+    }
   },
   "legacy": { "topics": [...], "scripts": [...], "uploadedAt": 0 }  // 可选
 }
@@ -50,6 +53,9 @@
 | `POST /api/sync/upload` | **Bearer** | 200 | 401 `UNAUTHORIZED`／409 `CONFLICT`（`baseUploadedAt` 落后，返回 `cloudUploadedAt`） |
 | `GET /api/sync/download` | **Bearer** | 200 `{topics,scripts,uploadedAt,empty}` | 401／502 `CLOUD_ERROR`／503 |
 | `GET /api/sync/status` | 无 | 200 `{syncConfigured, accountMode:true}` | — |
+| `GET /api/ai-config` | **Bearer** | 200 `{configured, maskedKey, updatedAt, serverConfigured}` | 401 |
+| `PUT /api/ai-config` | **Bearer** | 200 同 GET（`apiKey:''` 表示清除本账号的 Key） | 400 `BAD_KEY`（长度 < 12 或 > 200、含空白）／缺失字段 400／502 `AI_CONFIG_ERROR` |
+| `POST /api/ai-config/test` | **Bearer** | 200 `{ok, message}`（用请求体里的 Key，没有就用已保存的） | 400 `NO_KEY` ／401 |
 
 - 无 token / token 过期 / 用户已被删除 → 401 `{error:"未登录或登录已过期", code:"UNAUTHORIZED"}`；
 - `/api/auth/register` 限流 **5 次 / 10 分钟**，`/api/auth/login` **12 次 / 分钟**（按 IP）；
@@ -131,3 +137,33 @@ npx.cmd tsx scripts/cloud-admin.ts rewrite                    # 原样写回（�
    `uploaded_at` 列上），认领时会写成当前时间。
 4. 没有找回密码/改密码接口：忘记口令只能重新注册（数据在旧账号里，可用 `cloud-admin.ts` 查看）。
 5. 关掉密码登录的开关不存在——只要 Supabase 配好了，账号接口就是开的。
+6. 账号级 AI Key 存在同一行 JSON 里（加密后），所以第 1 条的取舍同样适用。
+
+## 10. 账号级 AI 配置（2026-10-12 追加）
+
+**为什么改**：原先 AI 的 DeepSeek Key 只能写在 `server/.env` 里，设置页还教用户去改
+`D:\自媒体之路\server\.env`——普通访客不可能做到；而且站点共用一把 Key，成本无法归属到人。
+
+**现在的模型**：一个账号一份 Key，跟着账号走。
+
+| 项 | 处理 |
+| --- | --- |
+| 存储 | `accounts[userId].ai = { deepseekApiKey, updatedAt }`，与选题/脚本同一份云端数据 |
+| 加密 | AES-256-GCM，随机 12 字节 IV，存成 `enc.v1.<iv>.<tag>.<ct>`（base64url）；密钥由 `AUTH_SECRET`／`server/data/auth-secret.txt` 用 `sha256(secret + '\|ai-config-v1')` 派生（`server/src/services/aiConfigStore.ts`） |
+| 回显 | 接口**只回掩码**（前 5 + `****` + 后 4），明文只在服务端内存里；前端输入框永远不回填明文 |
+| 生效优先级 | 账号 Key **优先**，没有才回落到站点公共 Key（`server/.env` 的 `DEEPSEEK_API_KEY`），所以未登录访客仍可用 AI |
+| 请求级传递 | `server/src/services/aiContext.ts` 用 `AsyncLocalStorage` 把「本次请求该用哪把 Key」传给 `aiService`，不用改 8 个导出函数的签名；`/api/ai/*` 上挂 `optionalAuth`（无 token 不报错）+ 一段中间件绑定 Key |
+| 运维 | `cloud-admin.ts set-ai <用户名> [--from-env\|--key sk-...]` 把站点 Key 迁进某个账号；`stats` 会打印每个账号 `ai=本账号已配置 / 无` |
+| 失败语义 | Key 错/过期/欠费只影响这次 AI 润色：接口返回 `aiUsed:false` + `aiError`，规则引擎结论照常返回 |
+
+**踩过的坑**（都已修）：
+1. `POST /api/ai-config/test` 不带 body 时 `req.body` 是空对象，早期实现把「字段缺失」当成
+   「格式非法」回了 400 `BAD_KEY`；现在入参是三态（缺失 / 显式清空 / 非法），缺失时用已保存的 Key。
+2. 早期版本给账号 Key 加了 60 秒进程内缓存，`cloud-admin set-ai` 从**另一个进程**写库后
+   运行中的后端看不到（实测 set-ai 后立刻测会 400 `NO_KEY`）；现在彻底去掉缓存——
+   `requireAuth`／`optionalAuth` 本来就已经读了那一行云端数据，直接用它手上的 `cloudAccount`
+   解密即可，既没有缓存窗口也少一次 Supabase 往返。
+
+**验收（2026-10-12）**：`D:\wp\_ai-config-probe.mjs` 在线上后端 `http://127.0.0.1:3001`
+dummy 阶段 **12/12**、real 阶段 **4/4**（含匿名 401、掩码不含明文、假 Key 时 `aiUsed:false`、
+真 Key 时 `aiUsed:true`、清空后回落到 `aiSource:'server'`）。

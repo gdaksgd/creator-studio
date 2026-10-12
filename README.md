@@ -250,6 +250,7 @@ export interface PlatformRule {
 | 令牌 | 无状态 HMAC-SHA256（`userId.exp.signature`，90 天），密钥取 `AUTH_SECRET`，没配就自动生成并持久化到 `server/data/auth-secret.txt` |
 | 迁移 | 改造前那一行的老数据自动进 `legacy` 字段**一条不丢**，且没有任何接口会返回它；本人注册后用 `cloud-admin.ts adopt-legacy <用户名>` 认领 |
 | 限流 | 注册 5 次/10 分钟、登录 12 次/分钟（按 IP），另有 429 + `Retry-After` |
+| AI Key | `/api/ai-config`（GET/PUT/POST `test`，需登录）让每个账号保存**自己**的 DeepSeek Key：AES-256-GCM 加密后与选题/脚本存在同一份账号数据里，接口只回掩码；本账号 Key 优先，没有才回落到站点公共 Key |
 
 ### 7.4 运行安全与 AI 成本
 
@@ -261,7 +262,7 @@ export interface PlatformRule {
 | 请求体 | `express.json` 上限收紧到 `2mb` |
 | 限流 | 零依赖内存实现的分层限流：`/api/ai/*` 60s/20 次、采集 600s/3 次、其它 `/api/*` 60s/120 次，响应带 `X-RateLimit-*` 头 |
 | AI 成本 | 每日配额（默认 300），只读 GET 与纯规则调用**不消耗**配额 |
-| 密钥 | 全部走 `server/.env`，已 gitignore，**从未进入版本库** |
+| 密钥 | 站点公共 Key（DeepSeek / YouTube）全部走 `server/.env`，已 gitignore，**从未进入版本库**；用户自己的 DeepSeek Key 存在**他自己的账号数据**里（AES-256-GCM，不落明文、不回明文），设置页也不再教用户去改服务器文件 |
 
 ### 7.5 质量闸门
 

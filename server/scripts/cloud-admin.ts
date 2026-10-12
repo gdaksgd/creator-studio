@@ -1,4 +1,5 @@
 import { readCloud, updateCloud, writeCloud } from '../src/services/cloudStore.js';
+import { encryptSecret, maskKey } from '../src/services/aiConfigStore.js';
 
 // ============================================
 // 云端账号数据的运维小工具（在 server/ 目录下运行）
@@ -13,6 +14,11 @@ import { readCloud, updateCloud, writeCloud } from '../src/services/cloudStore.j
 //       把账号制之前的旧云端数据（legacy）交给某个账号。
 //       旧数据是匿名上传的，无法自动判断属于谁；本人注册后用它把数据认领回去。
 //       账号里已有数据时必须加 --force 才覆盖。
+//
+//   npx tsx scripts/cloud-admin.ts set-ai <用户名> --from-env
+//   npx tsx scripts/cloud-admin.ts set-ai <用户名> --key sk-xxxxxxxx
+//       把 DeepSeek Key 写进某个账号的 AI 配置（加密后落库，命令不回显明文）。
+//       --from-env 读 server/.env 里的 DEEPSEEK_API_KEY，用于把站点公共 Key 交给本人账号。
 //
 // 注意：改动会直接写到 Supabase 那一行，执行前先确认。
 // ============================================
@@ -32,7 +38,9 @@ async function stats(): Promise<void> {
     console.log(
       `    - ${user.username} (${user.id}) topics=${account?.topics.length ?? 0} scripts=${
         account?.scripts.length ?? 0
-      } updated=${formatTime(account?.uploadedAt ?? 0)} created=${formatTime(user.createdAt)}`
+      } ai=${account?.ai?.deepseekApiKey ? '本账号已配置' : '无（用站点公共配置）'} updated=${formatTime(
+        account?.uploadedAt ?? 0
+      )} created=${formatTime(user.createdAt)}`
     );
   }
   if (blob.legacy) {
@@ -102,6 +110,31 @@ async function adoptLegacy(username: string, force: boolean): Promise<void> {
   console.log(`已把旧数据交给账号 "${result.username}": topics=${result.topics} scripts=${result.scripts}`);
 }
 
+/**
+ * 把 DeepSeek Key 写进某个账号的 AI 配置（一个账号一份 AI 配置）。
+ * 明文不落库：用 AUTH_SECRET 派生的密钥做 AES-256-GCM 加密；命令也不回显明文。
+ */
+async function setAi(username: string, fromEnv: boolean, keyArg: string): Promise<void> {
+  if (!username) throw new Error('用法: set-ai <用户名> [--from-env | --key sk-...]');
+  const key = (fromEnv ? process.env.DEEPSEEK_API_KEY || '' : keyArg).trim();
+  if (!key) {
+    throw new Error(
+      '没有可写入的 Key：用 --from-env 读 server/.env 的 DEEPSEEK_API_KEY，或用 --key sk-... 直接指定'
+    );
+  }
+
+  const result = await updateCloud((blob) => {
+    const user = blob.users.find((item) => item.usernameKey === username.toLowerCase());
+    if (!user) throw new Error(`没有叫 "${username}" 的账号；先让本人注册，再执行本命令`);
+    const account = blob.accounts[user.id] ?? { topics: [], scripts: [], uploadedAt: 0 };
+    blob.accounts[user.id] = account;
+    account.ai = { deepseekApiKey: encryptSecret(key), updatedAt: Date.now() };
+    return { username: user.username, masked: maskKey(key) };
+  });
+
+  console.log(`已把 AI Key 写入账号 "${result.username}"：${result.masked}（AES-256-GCM 加密后落库，明文不进仓库）`);
+}
+
 const [command, ...rest] = process.argv.slice(2);
 
 try {
@@ -111,11 +144,14 @@ try {
     await prunePrefix(rest[0] ?? '');
   } else if (command === 'adopt-legacy') {
     await adoptLegacy(rest[0] ?? '', rest.includes('--force'));
+  } else if (command === 'set-ai') {
+    const keyIndex = rest.indexOf('--key');
+    await setAi(rest[0] ?? '', rest.includes('--from-env'), keyIndex >= 0 ? rest[keyIndex + 1] ?? '' : '');
   } else if (command === 'rewrite') {
     await rewrite();
   } else {
     console.error(
-      `未知命令: ${command}（可用: stats / prune-prefix <前缀> / adopt-legacy <用户名> [--force] / rewrite）`
+      `未知命令: ${command}（可用: stats / prune-prefix <前缀> / adopt-legacy <用户名> [--force] / set-ai <用户名> [--from-env|--key sk-...] / rewrite）`
     );
     process.exitCode = 1;
   }

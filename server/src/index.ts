@@ -9,6 +9,7 @@ import { rateLimit, dailyQuota } from './middleware/rateLimit.js';
 import { gzipJson, ensurePrecompressed, servePrecompressed } from './middleware/compression.js';
 import newsRoutes from './routes/news.js';
 import aiRoutes from './routes/ai.js';
+import aiConfigRoutes from './routes/aiConfig.js';
 import authRoutes from './routes/auth.js';
 import syncRoutes from './routes/sync.js';
 import videoRoutes from './routes/video.js';
@@ -138,6 +139,8 @@ app.use('/api', (req, res, next) => {
 // Routes
 app.use('/api/news', newsRoutes);
 app.use('/api/ai', aiRoutes);
+// 账号级 AI 配置（需要登录；注意路径是 /api/ai-config，不会被上面的 /api/ai 匹配到）
+app.use('/api/ai-config', aiConfigRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/sync', syncRoutes);
 app.use('/api/video', videoRoutes);

@@ -20,11 +20,23 @@ import { supabase, isSupabaseConfigured, SYNC_TABLE } from './supabaseClient.js'
 
 export const CLOUD_VERSION = 2;
 
+/**
+ * 账号级 AI 配置。
+ * deepseekApiKey 落库前用 AUTH_SECRET 派生的密钥做 AES-256-GCM 加密（见 services/aiConfigStore.ts），
+ * 明文只在服务端内存里出现，接口只回掩码。
+ */
+export interface CloudAiConfig {
+  deepseekApiKey?: string;
+  updatedAt?: number;
+}
+
 /** 单个账号自己的云端数据 */
 export interface CloudAccountData {
   topics: unknown[];
   scripts: unknown[];
   uploadedAt: number;
+  /** 该账号自己的 AI 配置；缺省表示用站点公共配置 */
+  ai?: CloudAiConfig;
 }
 
 /** 账号记录（口令只存 scrypt 摘要） */
@@ -105,13 +117,29 @@ function normalizeUser(raw: unknown): CloudUserRecord | null {
   return { id, username, usernameKey, passwordHash, createdAt: asNumber(record.createdAt, 0) };
 }
 
+function normalizeAiConfig(raw: unknown): CloudAiConfig | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const record = raw as Record<string, unknown>;
+  const ai: CloudAiConfig = {};
+  if (typeof record.deepseekApiKey === 'string' && record.deepseekApiKey) {
+    ai.deepseekApiKey = record.deepseekApiKey;
+  }
+  const updatedAt = asNumber(record.updatedAt, 0);
+  if (updatedAt > 0) ai.updatedAt = updatedAt;
+  return ai.deepseekApiKey ? ai : undefined;
+}
+
 function normalizeAccount(raw: unknown): CloudAccountData {
   const record = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-  return {
+  const account: CloudAccountData = {
     topics: asArray(record.topics),
     scripts: asArray(record.scripts),
     uploadedAt: asNumber(record.uploadedAt, 0),
   };
+  // AI 配置必须原样透传：读-改-写整份 blob 时漏掉它会把账号里的 Key 悄悄抹掉
+  const ai = normalizeAiConfig(record.ai);
+  if (ai) account.ai = ai;
+  return account;
 }
 
 /** 把云端读到的任意形状归一化成 v2；旧形状迁移进 legacy */

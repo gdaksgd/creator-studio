@@ -270,6 +270,26 @@ export interface AuthMeResponse {
   cloud: CloudUsage;
 }
 
+/** 这次请求的 AI Key 来自哪里：账号自己的 / 站点公共配置 / 都没配 */
+export type AiKeySource = 'account' | 'server' | 'none';
+
+/** /api/ai/status 的返回 */
+export interface AiStatusResponse {
+  aiConfigured: boolean;
+  aiSource: AiKeySource;
+  /** 站点是否配了 YouTube 数据源（只用于展示状态，配置方法不给用户看） */
+  youtubeConfigured: boolean;
+  accountInfo: AccountInfo;
+}
+
+/** /api/ai-config 的返回：一个账号一份 AI 配置，Key 只回掩码 */
+export interface AiConfigView {
+  configured: boolean;
+  maskedKey: string | null;
+  updatedAt: number | null;
+  serverConfigured: boolean;
+}
+
 export const api = {
   // News
   getNews: (params?: { category?: string; sourceType?: string; limit?: number }) => {
@@ -330,7 +350,19 @@ export const api = {
     request<SyncHistoryEntry[]>('/ai/account/history'),
 
   // Status
-  getStatus: () => request<{ aiConfigured: boolean; accountInfo: AccountInfo }>('/ai/status'),
+  getStatus: () => request<AiStatusResponse>('/ai/status'),
+
+  // 账号级 AI 配置（一个账号一份 DeepSeek Key；明文只进不出，读回来的是掩码）
+  getAiConfig: () => request<AiConfigView>('/ai-config'),
+  // apiKey 传空字符串 = 清除本账号的 Key（退回站点公共配置）
+  updateAiConfig: (apiKey: string) =>
+    request<AiConfigView>('/ai-config', { method: 'PUT', body: JSON.stringify({ apiKey }) }),
+  // 不传 key 就测账号里已保存的那个
+  testAiConfig: (apiKey?: string) =>
+    request<{ ok: boolean; message: string }>('/ai-config/test', {
+      method: 'POST',
+      body: JSON.stringify(apiKey ? { apiKey } : {}),
+    }),
 
   // 重新翻译全部新闻标题
   retranslate: () =>

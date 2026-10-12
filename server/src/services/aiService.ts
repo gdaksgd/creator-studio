@@ -1,15 +1,42 @@
 import OpenAI from 'openai';
-import { config, isAIConfigured } from '../config.js';
+import { AI_NOT_CONFIGURED_MESSAGE, getRequestAiKey, hasAiKey } from './aiContext.js';
 import { db } from '../db.js';
 import type { TopicEvaluation, ScriptSuggestion, NewsItem, IdeaEvaluation, TitleEvaluation, MaterialAnalysisResponse, AnimeSource } from '../types.js';
 import { getCategory, describeCategory } from '../config/categories.js';
 import { buildBasis, formatBenchmarkForPrompt } from './benchmarkService.js';
 
-function getClient(): OpenAI {
+function makeClient(apiKey: string): OpenAI {
   return new OpenAI({
     baseURL: 'https://api.deepseek.com',
-    apiKey: config.deepseekApiKey,
+    apiKey,
   });
+}
+
+/**
+ * 本次请求该用的 DeepSeek client。
+ * Key 由中间件按「账号 Key 优先、站点公共 Key 兜底」绑进请求作用域（services/aiContext.ts）。
+ */
+function getClient(): OpenAI {
+  return makeClient(getRequestAiKey());
+}
+
+/** 用指定的 Key 发一次最小请求做探活（设置页「测试连接」用） */
+export async function testApiKey(apiKey: string): Promise<{ ok: boolean; message: string }> {
+  try {
+    const client = makeClient(apiKey);
+    await client.chat.completions.create({
+      model: 'deepseek-chat',
+      messages: [{ role: 'user', content: 'ping' }],
+      max_tokens: 1,
+    });
+    return { ok: true, message: '连接正常，Key 可用' };
+  } catch (err: any) {
+    const status = err?.status ?? err?.response?.status;
+    if (status === 401) return { ok: false, message: 'Key 无效或已过期' };
+    if (status === 402) return { ok: false, message: 'Key 余额不足' };
+    if (status === 429) return { ok: false, message: 'Key 触发了限流，稍后再试' };
+    return { ok: false, message: `连接失败：${err?.message || '未知错误'}` };
+  }
 }
 
 // 品类文案一律来自 config/categories.ts（单一事实来源），此处不再硬编码任何品类名。
@@ -49,8 +76,8 @@ export async function evaluateTopic(
   notes: string,
   gameDescription?: string
 ): Promise<TopicEvaluation> {
-  if (!isAIConfigured()) {
-    throw new Error('AI 未配置，请在 .env 中设置 DEEPSEEK_API_KEY');
+  if (!hasAiKey()) {
+    throw new Error(AI_NOT_CONFIGURED_MESSAGE);
   }
 
   const cat = getCategory(category);
@@ -170,8 +197,8 @@ export async function evaluateProductionIdea(
   productionIdea: string,
   gameDescription?: string
 ): Promise<IdeaEvaluation> {
-  if (!isAIConfigured()) {
-    throw new Error('AI 未配置，请在 .env 中设置 DEEPSEEK_API_KEY');
+  if (!hasAiKey()) {
+    throw new Error(AI_NOT_CONFIGURED_MESSAGE);
   }
 
   if (!productionIdea || !productionIdea.trim()) {
@@ -273,8 +300,8 @@ export async function suggestScript(
   hook: string,
   storyboards: any[]
 ): Promise<ScriptSuggestion> {
-  if (!isAIConfigured()) {
-    throw new Error('AI 未配置，请在 .env 中设置 DEEPSEEK_API_KEY');
+  if (!hasAiKey()) {
+    throw new Error(AI_NOT_CONFIGURED_MESSAGE);
   }
 
   const scriptContent = storyboards.length > 0
@@ -368,8 +395,8 @@ export interface CoverPolishResult {
  * 这里只做文案生成，且提示词里明确写了「不要编造数据、不要用标题党词」。
  */
 export async function polishCoverCopy(input: CoverPolishInput): Promise<CoverPolishResult> {
-  if (!isAIConfigured()) {
-    throw new Error('AI 未配置，请在 .env 中设置 DEEPSEEK_API_KEY');
+  if (!hasAiKey()) {
+    throw new Error(AI_NOT_CONFIGURED_MESSAGE);
   }
 
   const platformDesc = input.platform === 'bilibili' ? 'B站（3-10分钟中长视频，计播放分钟数）' : '抖音（1-3分钟，计完播率）';
@@ -430,8 +457,8 @@ export async function evaluateScriptTitle(
   scriptTitle: string,
   category: string
 ): Promise<TitleEvaluation> {
-  if (!isAIConfigured()) {
-    throw new Error('AI 未配置，请在 .env 中设置 DEEPSEEK_API_KEY');
+  if (!hasAiKey()) {
+    throw new Error(AI_NOT_CONFIGURED_MESSAGE);
   }
 
   if (!scriptTitle || !scriptTitle.trim()) {
@@ -582,7 +609,7 @@ function isDegenerate(map: Map<string, string>, batchSize: number): boolean {
 }
 
 export async function translateTitles(items: { id: string; title: string }[]): Promise<Map<string, string>> {
-  if (!isAIConfigured()) {
+  if (!hasAiKey()) {
     console.log('[AI] Translation skipped: AI not configured');
     return new Map();
   }
@@ -642,8 +669,8 @@ export async function generateScriptDraft(
   productionIdea?: string,
   gameDescription?: string
 ): Promise<{ hook: string; storyboards: any[] }> {
-  if (!isAIConfigured()) {
-    throw new Error('AI 未配置，请在 .env 中设置 DEEPSEEK_API_KEY');
+  if (!hasAiKey()) {
+    throw new Error(AI_NOT_CONFIGURED_MESSAGE);
   }
 
   const cat = getCategory(category);
@@ -856,8 +883,8 @@ export async function analyzeMaterialNeeds(
   hook: string,
   storyboards: any[]
 ): Promise<MaterialAnalysisResponse> {
-  if (!isAIConfigured()) {
-    throw new Error('AI 未配置，请在 .env 中设置 DEEPSEEK_API_KEY');
+  if (!hasAiKey()) {
+    throw new Error(AI_NOT_CONFIGURED_MESSAGE);
   }
 
   if (!storyboards || storyboards.length === 0) {

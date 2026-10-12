@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Cloud, Database, LogIn, LogOut, RefreshCw, Sparkles, Trash2, TriangleAlert, UserRound } from 'lucide-react';
-import { api, ApiError, type AccountInfo } from '../api/client';
+import { Cloud, Database, KeyRound, LogIn, LogOut, RefreshCw, ShieldCheck, Trash2, TriangleAlert, UserRound } from 'lucide-react';
+import { api, ApiError, type AccountInfo, type AiKeySource } from '../api/client';
 import { manualSync } from '../services/syncService';
 import { useAuthStore } from '../services/authService';
 import { useToast } from '../components/ui/Toast';
@@ -64,6 +64,14 @@ function StatList({ children }: { children: ReactNode }) {
 export default function Settings() {
   const toast = useToast();
   const [aiConfigured, setAiConfigured] = useState(false);
+  // AI 配置：跟着账号走。aiSource 说明这次实际用的是「账号自己的 Key」还是「站点公共配置」
+  const [aiSource, setAiSource] = useState<AiKeySource>('none');
+  const [aiMasked, setAiMasked] = useState<string | null>(null);
+  const [aiUpdatedAt, setAiUpdatedAt] = useState<number | null>(null);
+  const [aiKeyInput, setAiKeyInput] = useState('');
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiMessage, setAiMessage] = useState<{ text: string; ok: boolean } | null>(null);
+  const [youtubeConfigured, setYoutubeConfigured] = useState(false);
   const [authForm, setAuthForm] = useState({ username: '', password: '' });
   const [authLocalError, setAuthLocalError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -159,12 +167,45 @@ export default function Settings() {
   useEffect(() => {
     api.getStatus().then((data) => {
       setAiConfigured(data.aiConfigured);
+      setAiSource(data.aiSource);
+      setYoutubeConfigured(data.youtubeConfigured);
       setForm(data.accountInfo);
     }).catch(console.error);
     api.getSyncStatus().then((data) => setSyncStatus(data.syncConfigured)).catch(() => setSyncStatus(false));
     countDemoData().then(setDemoCount).catch(() => setDemoCount(0));
     setDemoState(getDemoState());
   }, []);
+
+  // AI 配置跟着账号切换：登录后读自己账号里的 Key（只回掩码），退出后回到「站点公共配置」
+  useEffect(() => {
+    let alive = true;
+    api.getStatus()
+      .then((data) => {
+        if (!alive) return;
+        setAiSource(data.aiSource);
+        setAiConfigured(data.aiConfigured);
+        setYoutubeConfigured(data.youtubeConfigured);
+      })
+      .catch(() => { /* 后端不可用：保留当前状态，不影响本地功能 */ });
+
+    if (!authToken) {
+      setAiMasked(null);
+      setAiUpdatedAt(null);
+      setAiKeyInput('');
+      setAiMessage(null);
+      return () => { alive = false; };
+    }
+
+    api.getAiConfig()
+      .then((cfg) => {
+        if (!alive) return;
+        setAiMasked(cfg.maskedKey);
+        setAiUpdatedAt(cfg.updatedAt);
+      })
+      .catch(() => { /* 未登录或网络问题：卡片按「站点公共配置」展示 */ });
+
+    return () => { alive = false; };
+  }, [authToken]);
 
   const handleManualSync = async () => {
     setSyncing(true);
@@ -230,6 +271,80 @@ export default function Settings() {
       alert('保存失败: ' + (err as Error).message);
     } finally {
       setSaving(false);
+    }
+  };
+
+  /** 保存本账号的 DeepSeek Key（后端加密落库，只回掩码） */
+  const handleSaveAiKey = async () => {
+    const key = aiKeyInput.trim();
+    setAiMessage(null);
+    if (!key) {
+      setAiMessage({ text: '请先粘贴你的 DeepSeek Key', ok: false });
+      return;
+    }
+    if (key.length < 12) {
+      setAiMessage({ text: 'Key 看起来不完整，请检查是否复制全了', ok: false });
+      return;
+    }
+
+    setAiBusy(true);
+    try {
+      const cfg = await api.updateAiConfig(key);
+      setAiMasked(cfg.maskedKey);
+      setAiUpdatedAt(cfg.updatedAt);
+      setAiSource('account');
+      setAiConfigured(true);
+      setAiKeyInput('');
+      setAiMessage({ text: '已保存到你的账号，服务端加密存储', ok: true });
+      toast.success('AI 配置已保存到你的账号');
+    } catch (err) {
+      setAiMessage({
+        text:
+          err instanceof ApiError && err.status === 400
+            ? 'Key 格式不对：长度 12–200 且不能含空格'
+            : '保存失败: ' + (err as Error).message,
+        ok: false,
+      });
+    } finally {
+      setAiBusy(false);
+    }
+  };
+
+  /** 探活：输入框里有新 Key 就测它，否则测账号里已保存的那个 */
+  const handleTestAiKey = async () => {
+    setAiBusy(true);
+    setAiMessage(null);
+    try {
+      const key = aiKeyInput.trim();
+      const result = await api.testAiConfig(key || undefined);
+      setAiMessage({ text: result.message, ok: result.ok });
+    } catch (err) {
+      setAiMessage({ text: '测试失败: ' + (err as Error).message, ok: false });
+    } finally {
+      setAiBusy(false);
+    }
+  };
+
+  /** 清除本账号的 Key，回到站点公共配置 */
+  const handleClearAiKey = async () => {
+    setAiBusy(true);
+    setAiMessage(null);
+    try {
+      const cfg = await api.updateAiConfig('');
+      setAiMasked(cfg.maskedKey);
+      setAiUpdatedAt(cfg.updatedAt);
+      setAiKeyInput('');
+      setAiSource(cfg.serverConfigured ? 'server' : 'none');
+      setAiConfigured(cfg.serverConfigured);
+      setAiMessage({
+        text: cfg.serverConfigured ? '已清除，本账号改用站点公共配置' : '已清除',
+        ok: true,
+      });
+      toast.info('已清除本账号的 AI Key');
+    } catch (err) {
+      setAiMessage({ text: '清除失败: ' + (err as Error).message, ok: false });
+    } finally {
+      setAiBusy(false);
     }
   };
 
@@ -438,86 +553,105 @@ export default function Settings() {
             </div>
           </Card>
 
-          {/* AI 配置状态 + 可选数据源 */}
+          {/* AI 配置：一个账号一份 Key，存进自己的账号（服务端加密），不再教用户去改服务器上的文件 */}
           <Card padding="lg" className="anim-rise flex flex-col">
             <SectionHeading
-              title="AI 与数据源"
-              hint="选题评估、脚本生成与素材推荐都依赖它"
+              title="AI 配置"
+              hint="一个账号一份 DeepSeek Key，跟着你的账号走"
               action={
-                aiConfigured ? (
-                  <Badge variant="success">已连接</Badge>
+                aiSource === 'account' ? (
+                  <Badge variant="success">本账号</Badge>
+                ) : aiSource === 'server' ? (
+                  <Badge variant="neutral">站点公共配置</Badge>
                 ) : (
                   <Badge variant="warning">未配置</Badge>
                 )
               }
             />
+
             <div className="mt-3.5">
               <StatList>
-                <StatRow label="AI 服务">DeepSeek</StatRow>
-                <StatRow label="连接状态">
-                  <Badge variant={aiConfigured ? 'success' : 'warning'} size="sm">
-                    {aiConfigured ? '已连接' : '未配置'}
-                  </Badge>
+                <StatRow label="本账号 Key">
+                  {authToken ? aiMasked ?? '未设置' : '登录后可配置'}
                 </StatRow>
                 <StatRow label="视频数据源">
-                  <a
-                    href="https://console.cloud.google.com/"
-                    target="_blank"
-                    rel="noopener"
-                    className="text-primary hover:underline"
-                  >
-                    YouTube Data API（可选）→
-                  </a>
+                  <Badge variant={youtubeConfigured ? 'success' : 'neutral'} size="sm">
+                    {youtubeConfigured ? 'YouTube 已连接' : 'YouTube 未配置'}
+                  </Badge>
                 </StatRow>
               </StatList>
             </div>
 
-            <div className="mt-4 space-y-4 text-xs leading-relaxed text-text-secondary">
-              <div>
-                <p className="mb-1.5 font-medium text-text">AI（DeepSeek）配置步骤</p>
-                <ol className="list-inside list-decimal space-y-1">
-                  <li>
-                    注册 DeepSeek 平台账号:{' '}
-                    <a href="https://platform.deepseek.com/" target="_blank" rel="noopener" className="text-primary hover:underline">
-                      platform.deepseek.com
-                    </a>
-                  </li>
-                  <li>在 API Keys 页面创建一个新的 Key</li>
-                  <li>
-                    打开 <code className="num rounded bg-surface-muted px-1 text-text">D:\自媒体之路\server\.env</code>
-                  </li>
-                  <li>
-                    填入 <code className="num rounded bg-surface-muted px-1 text-text">DEEPSEEK_API_KEY=你的key</code>
-                  </li>
-                  <li>重启后端服务</li>
-                </ol>
+            {authToken ? (
+              <div className="mt-4">
+                <Field
+                  label="DeepSeek API Key"
+                  hint={aiUpdatedAt ? `上次更新 ${formatLocalTime(aiUpdatedAt)}` : undefined}
+                >
+                  <Input
+                    type="password"
+                    value={aiKeyInput}
+                    autoComplete="off"
+                    spellCheck={false}
+                    onChange={(e) => {
+                      setAiKeyInput(e.target.value);
+                      setAiMessage(null);
+                    }}
+                    placeholder="sk-..."
+                  />
+                </Field>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <Button variant="primary" size="sm" loading={aiBusy} onClick={() => void handleSaveAiKey()}>
+                    <KeyRound className="h-3.5 w-3.5" aria-hidden="true" />
+                    保存到我的账号
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={aiBusy || (!aiKeyInput.trim() && !aiMasked)}
+                    onClick={() => void handleTestAiKey()}
+                  >
+                    测试连接
+                  </Button>
+                  {aiMasked && (
+                    <Button variant="ghost" size="sm" disabled={aiBusy} onClick={() => void handleClearAiKey()}>
+                      清除
+                    </Button>
+                  )}
+                </div>
+                {aiMessage && (
+                  <p
+                    className={`mt-2.5 text-xs leading-relaxed ${aiMessage.ok ? 'text-success' : 'text-danger'}`}
+                  >
+                    {aiMessage.text}
+                  </p>
+                )}
               </div>
+            ) : (
+              <p className="mt-4 rounded-xl border border-dashed border-border px-3.5 py-3 text-xs leading-relaxed text-text-secondary">
+                {aiConfigured
+                  ? '现在用的是站点公共 AI 配置，可以直接用。'
+                  : '站点还没有配置公共 AI，'}
+                <span className="text-text">登录后</span>
+                把你的 DeepSeek Key 存进账号，换设备登录也跟着走。
+              </p>
+            )}
 
-              <div className="border-t border-border pt-4">
-                <p className="mb-1.5 font-medium text-text">YouTube Data API 配置步骤（可选）</p>
-                <ol className="list-inside list-decimal space-y-1.5">
-                  <li>
-                    打开{' '}
-                    <a href="https://console.cloud.google.com/" target="_blank" rel="noopener" className="text-primary hover:underline">
-                      Google Cloud Console
-                    </a>
-                  </li>
-                  <li>创建一个新项目（或选择已有项目）</li>
-                  <li>在「API 和服务」中启用「YouTube Data API v3」</li>
-                  <li>在「凭据」中创建 API Key</li>
-                  <li>
-                    填入 <code className="num rounded bg-surface-muted px-1 text-text">YOUTUBE_API_KEY=你的key</code>
-                  </li>
-                  <li>重启后端服务</li>
-                </ol>
-                <p className="mt-2 flex items-start gap-1.5 text-warning">
-                  <Sparkles className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                  <span>
-                    每天免费额度 <span className="num">10,000</span> 单位，足够日常使用。
-                  </span>
-                </p>
-              </div>
-            </div>
+            <p className="mt-auto flex items-center gap-1.5 border-t border-border pt-4 text-xs text-text-muted">
+              <ShieldCheck className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <span>
+                只显示掩码，Key 加密存在你的账号里；没有 Key 可以去{' '}
+                <a
+                  href="https://platform.deepseek.com/"
+                  target="_blank"
+                  rel="noopener"
+                  className="text-primary hover:underline"
+                >
+                  platform.deepseek.com
+                </a>{' '}
+                申请。
+              </span>
+            </p>
           </Card>
         </div>
       </section>
