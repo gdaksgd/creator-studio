@@ -288,10 +288,10 @@ function notReady(reason: string, days: number): GameIndustryReport {
     categories: [],
     titlePattern: {
       basis: none,
-      questionRatio: metric('疑问句标题占比', 0, 'ratio', none),
-      lengthP25: metric('标题字数 P25', 0, 'chars', none),
-      lengthMedian: metric('标题字数中位', 0, 'chars', none),
-      lengthP75: metric('标题字数 P75', 0, 'chars', none),
+      questionRatio: null,
+      lengthP25: null,
+      lengthMedian: null,
+      lengthP75: null,
       lengthBuckets: [],
       keywords: [],
       caveat: '样本不足，未做标题统计。',
@@ -486,10 +486,10 @@ function buildTitlePattern(
     unavailable.push(msg);
     return {
       basis: scopeBasis,
-      questionRatio: metric('疑问句标题占比', 0, 'ratio', scopeBasis),
-      lengthP25: metric('标题字数 P25', 0, 'chars', scopeBasis),
-      lengthMedian: metric('标题字数中位', 0, 'chars', scopeBasis),
-      lengthP75: metric('标题字数 P75', 0, 'chars', scopeBasis),
+      questionRatio: null,
+      lengthP25: null,
+      lengthMedian: null,
+      lengthP75: null,
       lengthBuckets: [],
       keywords: [],
       caveat: msg,
@@ -679,7 +679,7 @@ function buildSuggestions(
     });
   }
 
-  if (title.keywords.length) {
+  if (title.keywords.length && title.questionRatio) {
     const top3 = title.keywords.slice(0, 3).map((k) => `「${k.word}」（${k.count} 条标题出现）`).join('、');
     out.push({
       text: `这批热门标题反复出现的内容词是 ${top3}。疑问句标题占 ${title.questionRatio.display}——B站上疑问句标题对点击有正向影响的结论出自同行评审研究（见文末出处），但这里只报告占比，不据此保证因果。`,
@@ -814,14 +814,20 @@ export function renderReportMarkdown(report: GameIndustryReport): string {
   const t = report.titlePattern;
   L.push(`样本口径：${basisShort(t.basis)}`);
   L.push('');
-  L.push('| 指标 | 数值 | 来源与样本量 |');
-  L.push('|---|---|---|');
-  L.push(`| 疑问句标题占比 | ${t.questionRatio.display} | ${sourceCell(t.questionRatio)} |`);
-  L.push(`| 标题字数 P25 | ${t.lengthP25.display} | ${sourceCell(t.lengthP25)} |`);
-  L.push(`| 标题字数中位 | ${t.lengthMedian.display} | ${sourceCell(t.lengthMedian)} |`);
-  L.push(`| 标题字数 P75 | ${t.lengthP75.display} | ${sourceCell(t.lengthP75)} |`);
-  L.push('');
-  if (t.lengthBuckets.length) {
+  if (!t.questionRatio || !t.lengthP25 || !t.lengthMedian || !t.lengthP75) {
+    // 没有样本就没有数字：这里宁可只写一句「样本不足」
+    L.push('本维度样本不足，不给数字。');
+    L.push('');
+  } else {
+    L.push('| 指标 | 数值 | 来源与样本量 |');
+    L.push('|---|---|---|');
+    L.push(`| 疑问句标题占比 | ${t.questionRatio.display} | ${sourceCell(t.questionRatio)} |`);
+    L.push(`| 标题字数 P25 | ${t.lengthP25.display} | ${sourceCell(t.lengthP25)} |`);
+    L.push(`| 标题字数中位 | ${t.lengthMedian.display} | ${sourceCell(t.lengthMedian)} |`);
+    L.push(`| 标题字数 P75 | ${t.lengthP75.display} | ${sourceCell(t.lengthP75)} |`);
+    L.push('');
+  }
+  if (t.lengthBuckets.length && t.lengthMedian) {
     L.push('标题字数分布：');
     L.push('');
     L.push('| 字数区间 | 条数 | 占比 | 来源与样本量 |');
