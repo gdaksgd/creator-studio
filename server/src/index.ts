@@ -212,10 +212,11 @@ app.listen(config.port, () => {
   // 放在后台跑，不阻塞启动；失败只影响基准线，其它功能照常。
   void refreshBenchmarks();
 
-  // Initial collection on startup (delayed)
+  // 启动时先跑一轮「轻量采集」（RSS + B站，不消耗 YouTube 配额），让首屏就有新鲜资讯；
+  // 含 YouTube 的完整轮交给 6 小时一次的 cron 或手动「立即采集」。
   setTimeout(() => {
-    import('./services/scheduler.js').then(({ collectAll }) => {
-      collectAll().catch(console.error);
+    import('./services/scheduler.js').then(({ collectLight }) => {
+      collectLight().catch(console.error);
     });
   }, 3000);
 });

@@ -15,7 +15,11 @@ export const config = {
   port: parseInt(process.env.PORT || '3001'),
   deepseekApiKey: process.env.DEEPSEEK_API_KEY || '',
   youtubeApiKey: process.env.YOUTUBE_API_KEY || '',
+  // 完整采集（RSS + YouTube + B站）的 cron；YouTube 一次 search.list 就要 100 单位配额，
+  // 一轮最多 20 个关键词 ≈ 2000 单位，而每日配额只有 10000 单位，所以不能调得太密。
   collectInterval: process.env.COLLECT_INTERVAL || '0 */6 * * *',
+  // 轻量采集（只跑 RSS + B站，不碰 YouTube 配额）的 cron，默认每小时第 5 分钟跑一次。
+  lightCollectInterval: process.env.LIGHT_COLLECT_INTERVAL || '5 * * * *',
   dataDir: path.join(__dirname, '..', 'data'),
   // Cloud sync (Supabase)
   supabaseUrl: process.env.SUPABASE_URL || '',

@@ -9,49 +9,54 @@ import { syncAccount } from './accountSyncService.js';
 
 let isCollecting = false;
 
-export async function collectAll(): Promise<{ total: number; sources: Record<string, number> }> {
+// 轻量轮跑完后 30 分钟内不再跑，避免和完整轮（含 YouTube）贴在一起重复采集
+const LIGHT_SKIP_MS = 30 * 60 * 1000;
+
+export interface CollectResult {
+  total: number;
+  sources: Record<string, number>;
+}
+
+/**
+ * 采集资讯。
+ *
+ * @param includeYouTube 是否包含 YouTube。**默认包含**——手动「立即采集」走的就是这条；
+ *   定时任务里的轻量轮传 false，只跑 RSS + B站，避免每小时都吃 YouTube 配额。
+ */
+export async function collectAll(options: { includeYouTube?: boolean } = {}): Promise<CollectResult> {
+  const includeYouTube = options.includeYouTube !== false;
+
   if (isCollecting) {
     console.log('[Scheduler] Already collecting, skipping');
     return { total: 0, sources: {} };
   }
 
   isCollecting = true;
-  console.log('[Scheduler] Starting collection...');
+  console.log(`[Scheduler] Starting collection${includeYouTube ? '' : ' (RSS + Bilibili only)'}...`);
 
   const sources: Record<string, number> = {};
 
   try {
-    const [rssItems, youtubeItems, bilibiliItems] = await Promise.allSettled([
-      collectRSS(),
-      collectYouTube(),
-      collectBilibili(),
-    ]);
+    const jobs: { name: 'rss' | 'youtube' | 'bilibili'; run: () => Promise<any[]> }[] = [
+      { name: 'rss', run: collectRSS },
+      { name: 'bilibili', run: collectBilibili },
+    ];
+    if (includeYouTube) jobs.splice(1, 0, { name: 'youtube', run: collectYouTube });
+
+    const settled = await Promise.allSettled(jobs.map((job) => job.run()));
 
     let allItems: any[] = [];
 
-    if (rssItems.status === 'fulfilled') {
-      sources.rss = rssItems.value.length;
-      allItems = allItems.concat(rssItems.value);
-    } else {
-      sources.rss = 0;
-      console.error('[Scheduler] RSS failed:', rssItems.reason);
-    }
-
-    if (youtubeItems.status === 'fulfilled') {
-      sources.youtube = youtubeItems.value.length;
-      allItems = allItems.concat(youtubeItems.value);
-    } else {
-      sources.youtube = 0;
-      console.error('[Scheduler] YouTube failed:', youtubeItems.reason);
-    }
-
-    if (bilibiliItems.status === 'fulfilled') {
-      sources.bilibili = bilibiliItems.value.length;
-      allItems = allItems.concat(bilibiliItems.value);
-    } else {
-      sources.bilibili = 0;
-      console.error('[Scheduler] Bilibili failed:', bilibiliItems.reason);
-    }
+    settled.forEach((result, index) => {
+      const name = jobs[index].name;
+      if (result.status === 'fulfilled') {
+        sources[name] = result.value.length;
+        allItems = allItems.concat(result.value);
+      } else {
+        sources[name] = 0;
+        console.error(`[Scheduler] ${name} failed:`, result.reason);
+      }
+    });
 
     const added = db.addNews(allItems);
     db.setLastCollected(Date.now());
@@ -81,14 +86,36 @@ export async function collectAll(): Promise<{ total: number; sources: Record<str
   }
 }
 
+/**
+ * 轻量轮：只采 RSS + B站（免费、无配额），用于「每小时都有新资讯」。
+ * 若上一轮采集在 30 分钟内跑过（例如刚跑完含 YouTube 的完整轮）就跳过，不重复劳动。
+ */
+export async function collectLight(): Promise<CollectResult> {
+  const lastCollected = db.getLastCollected();
+  if (lastCollected && Date.now() - lastCollected < LIGHT_SKIP_MS) {
+    console.log('[Scheduler] Light collection skipped (a round just ran)');
+    return { total: 0, sources: {} };
+  }
+  return collectAll({ includeYouTube: false });
+}
+
 export function startScheduler(): void {
   if (cron.validate(config.collectInterval)) {
     cron.schedule(config.collectInterval, () => {
       collectAll().catch(console.error);
     });
-    console.log(`[Scheduler] News collection scheduled: ${config.collectInterval}`);
+    console.log(`[Scheduler] Full collection (RSS + YouTube + Bilibili) scheduled: ${config.collectInterval}`);
   } else {
     console.warn(`[Scheduler] Invalid cron interval: ${config.collectInterval}`);
+  }
+
+  if (config.lightCollectInterval && cron.validate(config.lightCollectInterval)) {
+    cron.schedule(config.lightCollectInterval, () => {
+      collectLight().catch(console.error);
+    });
+    console.log(`[Scheduler] Light collection (RSS + Bilibili) scheduled: ${config.lightCollectInterval}`);
+  } else {
+    console.warn(`[Scheduler] Light collection disabled (invalid or empty interval: '${config.lightCollectInterval}')`);
   }
 
   // 每天早上 8:00 自动同步账号数据
