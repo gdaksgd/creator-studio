@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Cloud, Database, LogIn, LogOut, RefreshCw, Sparkles, Trash2, TriangleAlert, UserRound } from 'lucide-react';
 import { api, ApiError, type AccountInfo } from '../api/client';
 import { manualSync } from '../services/syncService';
@@ -27,6 +27,38 @@ function formatLocalTime(ts?: number): string {
 function isUnauthorized(err: unknown): boolean {
   if (err instanceof ApiError && err.status === 401) return true;
   return typeof err === 'object' && err !== null && (err as { code?: string }).code === 'UNAUTHORIZED';
+}
+
+/**
+ * 分组标签：设置项多了以后，一张卡片挨一张卡片地排下来会显得又长又乱。
+ * 用「小标签 + 细线」把卡片分成账号 / 平台与数据源 / 本机数据与备份三组，
+ * 每组内部才是两列网格——同一行的卡片高度由 grid 拉伸对齐，不再出现一边高一边空的锯齿。
+ */
+function GroupLabel({ children }: { children: ReactNode }) {
+  return (
+    <div data-group-label className="mb-3 flex items-center gap-3">
+      <span className="eyebrow">{children}</span>
+      <span className="h-px flex-1 bg-border" aria-hidden="true" />
+    </div>
+  );
+}
+
+/** 键值行：账号卡片和状态卡片共用，保证同一页里的信息行长得一样 */
+function StatRow({ label, children }: { label: ReactNode; children: ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-3 py-2.5">
+      <span className="shrink-0 text-xs text-text-secondary">{label}</span>
+      <span className="num min-w-0 truncate text-xs font-medium text-text">{children}</span>
+    </div>
+  );
+}
+
+function StatList({ children }: { children: ReactNode }) {
+  return (
+    <div className="divide-y divide-border rounded-xl border border-border bg-surface-muted/40 px-3.5">
+      {children}
+    </div>
+  );
 }
 
 export default function Settings() {
@@ -202,15 +234,16 @@ export default function Settings() {
   };
 
   return (
-    <div>
+    <div className="space-y-7">
       <PageHeader
         eyebrow="系统 / SETTINGS"
         title="设置"
         description="AI 能力、账号绑定与数据同步。所有创作数据都保存在本机浏览器，云端同步只是可选备份。"
       />
 
-      <div className="grid gap-5 xl:grid-cols-2 xl:items-start">
-        {/* 账号与云端 */}
+      {/* ───────────────── 账号 ───────────────── */}
+      <section>
+        <GroupLabel>账号</GroupLabel>
         <Card padding="lg" className="anim-rise">
           <SectionHeading
             title="账号与云端"
@@ -226,346 +259,363 @@ export default function Settings() {
             }
           />
 
-          {!authToken ? (
-            <>
-              <p className="mt-3 text-xs leading-relaxed text-text-muted">
-                注册后演示数据会自动清空，云端只保存你自己的数据；
-                <span className="text-text">不注册也能继续本地使用</span>，所有创作数据都留在本机。
-              </p>
+          {authToken ? (
+            /* 已登录：左边是「我在云端有什么」，右边是「能做什么」 */
+            <div className="mt-4 grid gap-5 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)] lg:items-start">
+              <StatList>
+                <StatRow label="登录账号">{authUser?.username ?? '已登录'}</StatRow>
+                <StatRow label="云端数据">
+                  {authCloud ? `${authCloud.topicCount} 个选题 · ${authCloud.scriptCount} 个脚本` : '—'}
+                </StatRow>
+                <StatRow label="云端更新时间">{formatLocalTime(authCloud?.uploadedAt)}</StatRow>
+              </StatList>
 
-              <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                <Field label="用户名" hint="3–24 个字符">
-                  <Input
-                    type="text"
-                    value={authForm.username}
-                    autoComplete="username"
-                    onChange={(e) => updateAuthField({ username: e.target.value })}
-                    placeholder="例如: creator2026"
-                  />
-                </Field>
-                <Field label="密码" hint="至少 6 位">
-                  <Input
-                    type="password"
-                    value={authForm.password}
-                    autoComplete="current-password"
-                    onChange={(e) => updateAuthField({ password: e.target.value })}
-                    placeholder="••••••"
-                  />
-                </Field>
-              </div>
-
-              <div className="mt-4 flex flex-wrap items-center gap-2">
-                <Button
-                  variant="primary"
-                  size="sm"
-                  loading={authLoading}
-                  onClick={() => void handleAuth('register')}
-                >
-                  <UserRound className="h-3.5 w-3.5" aria-hidden="true" />
-                  注册并开始使用
-                </Button>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={authLoading}
-                  onClick={() => void handleAuth('login')}
-                >
-                  <LogIn className="h-3.5 w-3.5" aria-hidden="true" />
-                  登录
-                </Button>
-              </div>
-
-              {(authLocalError || authError) && (
-                <div className="mt-3 flex items-start gap-2 rounded-lg border border-danger/30 bg-danger-soft px-3 py-2">
-                  <TriangleAlert className="mt-px h-3.5 w-3.5 shrink-0 text-danger" aria-hidden="true" />
-                  <p className="min-w-0 flex-1 text-xs leading-relaxed text-danger">
-                    {authLocalError || authError}
-                  </p>
-                </div>
-              )}
-
-              {!authConfigured && (
-                <p className="mt-3 text-xs leading-relaxed text-text-muted">
-                  服务端未配置云端账号，本地功能不受影响。
+              <div className="flex min-w-0 flex-col gap-3">
+                <p className="text-xs leading-relaxed text-text-muted">
+                  数据先写本机，再同步到你的账号；退出登录不会删除本机数据。
                 </p>
-              )}
-            </>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    loading={syncing}
+                    disabled={!syncStatus}
+                    onClick={handleManualSync}
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                    立即同步
+                  </Button>
+                  <Button variant="dangerGhost" size="sm" onClick={() => void handleLogout()}>
+                    <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
+                    退出登录
+                  </Button>
+                  {syncMessage && <span className="text-xs text-success">{syncMessage}</span>}
+                </div>
+                <p className="flex items-start gap-1.5 text-xs leading-relaxed text-text-muted">
+                  <Cloud className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <span>一次登录，本机与云端保持一致；演示数据不会进入云端。</span>
+                </p>
+              </div>
+            </div>
           ) : (
-            <>
-              <div className="mt-3.5 divide-y divide-border rounded-xl border border-border bg-surface-muted/40 px-3.5">
-                <div className="flex items-center justify-between gap-3 py-2.5">
-                  <span className="text-xs text-text-secondary">登录账号</span>
-                  <span className="num truncate text-xs font-medium text-text">
-                    {authUser?.username ?? '已登录'}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between gap-3 py-2.5">
-                  <span className="text-xs text-text-secondary">云端数据</span>
-                  <span className="num text-xs font-medium text-text">
-                    {authCloud ? `${authCloud.topicCount} 个选题 · ${authCloud.scriptCount} 个脚本` : '—'}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between gap-3 py-2.5">
-                  <span className="shrink-0 text-xs text-text-secondary">云端更新时间</span>
-                  <span className="num text-xs font-medium text-text">
-                    {formatLocalTime(authCloud?.uploadedAt)}
-                  </span>
-                </div>
+            /* 未登录：左边说清楚这是什么，右边就是那一个表单 */
+            <div className="mt-4 grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,380px)] lg:items-start">
+              <div className="min-w-0 space-y-3">
+                <p className="text-xs leading-relaxed text-text-muted">
+                  注册后演示数据会自动清空，云端只保存你自己的数据；
+                  <span className="text-text">不注册也能继续本地使用</span>，所有创作数据都留在本机。
+                </p>
+                <ul className="space-y-2 text-xs leading-relaxed text-text-secondary">
+                  <li className="flex gap-2">
+                    <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-primary" aria-hidden="true" />
+                    <span>一人一份云端数据，换设备登录就能恢复</span>
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-primary" aria-hidden="true" />
+                    <span>数据改动后 5 秒自动上传，也可以手动触发</span>
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-primary" aria-hidden="true" />
+                    <span>演示数据只写本机，不会进入云端同步</span>
+                  </li>
+                </ul>
+                {!authConfigured && (
+                  <p className="text-xs leading-relaxed text-warning">
+                    服务端未配置云端账号，本地功能不受影响。
+                  </p>
+                )}
               </div>
 
-              <div className="mt-4 flex flex-wrap items-center gap-2">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  loading={syncing}
-                  disabled={!syncStatus}
-                  onClick={handleManualSync}
-                >
-                  <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
-                  立即同步
-                </Button>
-                <Button
-                  variant="dangerGhost"
-                  size="sm"
-                  onClick={() => void handleLogout()}
-                >
-                  <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
-                  退出登录
-                </Button>
-                {syncMessage && <span className="text-xs text-text-secondary">{syncMessage}</span>}
+              <div className="rounded-xl border border-border bg-surface-muted/40 p-4">
+                <div className="grid gap-3">
+                  <Field label="用户名" hint="3–24 个字符">
+                    <Input
+                      type="text"
+                      value={authForm.username}
+                      autoComplete="username"
+                      onChange={(e) => updateAuthField({ username: e.target.value })}
+                      placeholder="例如: creator2026"
+                    />
+                  </Field>
+                  <Field label="密码" hint="至少 6 位">
+                    <Input
+                      type="password"
+                      value={authForm.password}
+                      autoComplete="current-password"
+                      onChange={(e) => updateAuthField({ password: e.target.value })}
+                      placeholder="••••••"
+                    />
+                  </Field>
+                </div>
+
+                <div className="mt-4 flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    loading={authLoading}
+                    onClick={() => void handleAuth('register')}
+                  >
+                    <UserRound className="h-3.5 w-3.5" aria-hidden="true" />
+                    注册并开始使用
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={authLoading}
+                    onClick={() => void handleAuth('login')}
+                  >
+                    <LogIn className="h-3.5 w-3.5" aria-hidden="true" />
+                    登录
+                  </Button>
+                </div>
+
+                {(authLocalError || authError) && (
+                  <div className="mt-3 flex items-start gap-2 rounded-lg border border-danger/30 bg-danger-soft px-3 py-2">
+                    <TriangleAlert className="mt-px h-3.5 w-3.5 shrink-0 text-danger" aria-hidden="true" />
+                    <p className="min-w-0 flex-1 text-xs leading-relaxed text-danger">
+                      {authLocalError || authError}
+                    </p>
+                  </div>
+                )}
               </div>
-
-              <p className="mt-3 flex items-start gap-1.5 text-xs leading-relaxed text-text-muted">
-                <Cloud className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                <span>数据先写本机，再同步到你的账号；退出登录不会删除本机数据。</span>
-              </p>
-            </>
-          )}
-        </Card>
-
-        {/* 演示数据 */}
-        <Card padding="lg" className="anim-rise">
-          <SectionHeading
-            title="演示数据"
-            hint="一键让所有页面进入「有内容」的状态"
-            action={
-              demoCount > 0 ? (
-                <Badge variant="success">已载入 {demoCount} 条</Badge>
-              ) : (
-                <Badge variant="neutral">未载入</Badge>
-              )
-            }
-          />
-          <p className="mt-3 text-xs leading-relaxed text-text-muted">
-            演示数据包含 9 个选题（含已发布数据、AI 评估、素材方案与 6 份分镜脚本），
-            只写入本机 IndexedDB，<span className="text-text">不会进入云端同步</span>，
-            随时可以一键清空。第一次打开站点且本地为空时会自动载入。
-          </p>
-          <div className="mt-3.5 divide-y divide-border rounded-xl border border-border bg-surface-muted/40 px-3.5">
-            <div className="flex items-center justify-between gap-3 py-2.5">
-              <span className="text-xs text-text-secondary">已载入演示数据</span>
-              <span className="num text-xs font-medium text-text">{demoCount} 条</span>
-            </div>
-            <div className="flex items-center justify-between gap-3 py-2.5">
-              <span className="text-xs text-text-secondary">自动载入</span>
-              <Badge variant={demoState === 'off' ? 'neutral' : 'success'} size="sm">
-                {demoState === 'off' ? '已关闭' : '开启'}
-              </Badge>
-            </div>
-          </div>
-          <div className="mt-4 flex flex-wrap items-center gap-2">
-            <Button variant="primary" size="sm" loading={demoBusy} onClick={handleSeedDemo}>
-              <Database className="h-3.5 w-3.5" aria-hidden="true" />
-              载入演示数据
-            </Button>
-            <Button
-              variant="dangerGhost"
-              size="sm"
-              disabled={demoBusy || demoCount === 0}
-              onClick={handleClearDemo}
-            >
-              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-              清空演示数据
-            </Button>
-          </div>
-          {demoMessage && (
-            <p className="mt-3 text-xs text-success">{demoMessage}</p>
-          )}
-        </Card>
-
-        {/* AI 配置状态 */}
-        <Card padding="lg" className="anim-rise">
-          <SectionHeading
-            title="AI 配置状态"
-            hint="选题评估、脚本生成与素材推荐都依赖它"
-            action={
-              aiConfigured ? (
-                <Badge variant="success">已连接</Badge>
-              ) : (
-                <Badge variant="warning">未配置</Badge>
-              )
-            }
-          />
-          <div className="mt-3.5 divide-y divide-border rounded-xl border border-border bg-surface-muted/40 px-3.5">
-            <div className="flex items-center justify-between gap-3 py-2.5">
-              <span className="text-xs text-text-secondary">AI 服务</span>
-              <span className="text-xs font-medium text-text">DeepSeek</span>
-            </div>
-            <div className="flex items-center justify-between gap-3 py-2.5">
-              <span className="text-xs text-text-secondary">连接状态</span>
-              <Badge variant={aiConfigured ? 'success' : 'warning'} size="sm">
-                {aiConfigured ? '已连接' : '未配置'}
-              </Badge>
-            </div>
-          </div>
-          {!aiConfigured && (
-            <div className="mt-4 space-y-2 text-xs leading-relaxed text-text-secondary">
-              <p className="font-medium text-text">配置步骤：</p>
-              <ol className="list-inside list-decimal space-y-1">
-                <li>
-                  注册 DeepSeek 平台账号:{' '}
-                  <a href="https://platform.deepseek.com/" target="_blank" rel="noopener" className="text-primary hover:underline">
-                    platform.deepseek.com
-                  </a>
-                </li>
-                <li>在 API Keys 页面创建一个新的 Key</li>
-                <li>
-                  打开 <code className="num rounded bg-surface-muted px-1 text-text">D:\自媒体之路\server\.env</code> 文件
-                </li>
-                <li>
-                  填入: <code className="num rounded bg-surface-muted px-1 text-text">DEEPSEEK_API_KEY=你的key</code>
-                </li>
-                <li>重启后端服务</li>
-              </ol>
             </div>
           )}
         </Card>
+      </section>
 
-        {/* 账号绑定配置 */}
-        <Card padding="lg" className="anim-rise">
-          <SectionHeading
-            title="账号绑定"
-            hint="填写后每天自动同步账号数据"
-            action={
-              <a href="/analytics" className="text-xs text-primary hover:underline">
-                查看数据看板 →
-              </a>
-            }
-          />
-          <div className="mt-4 grid gap-4 sm:grid-cols-2">
-            <Field label="B站 UID" hint={form.bilibiliName ? `✓ ${form.bilibiliName}` : undefined}>
-              <Input
-                type="text"
-                value={form.bilibiliUid || ''}
-                onChange={(e) => setForm({ ...form, bilibiliUid: e.target.value })}
-                placeholder="例如: 289518100"
-              />
-            </Field>
-            <Field label="抖音号" hint={form.douyinName ? `✓ ${form.douyinName}` : undefined}>
-              <Input
-                type="text"
-                value={form.douyinId || ''}
-                onChange={(e) => setForm({ ...form, douyinId: e.target.value })}
-                placeholder="例如: zgbwngbd"
-              />
-            </Field>
-            <Field label="内容方向">
-              <Input
-                type="text"
-                value={form.contentFocus}
-                onChange={(e) => setForm({ ...form, contentFocus: e.target.value })}
-              />
-            </Field>
-            <Field label="活跃天数">
-              <Input
-                type="number"
-                value={form.daysActive}
-                onChange={(e) => setForm({ ...form, daysActive: Number(e.target.value) })}
-              />
-            </Field>
-          </div>
-          <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-border pt-4">
-            <Button variant="primary" size="sm" loading={saving} onClick={handleSave}>
-              保存配置
-            </Button>
-            {saved && <Badge variant="success">✓ 已保存</Badge>}
-          </div>
-        </Card>
-
-        {/* 云端同步 */}
-        <Card padding="lg" className="anim-rise">
-          <SectionHeading
-            title="云端同步"
-            hint="数据改动后 5 秒自动上传，换设备可恢复"
-            action={
-              syncStatus ? (
-                <Badge variant="success">已启用</Badge>
-              ) : (
-                <Badge variant="neutral">未配置</Badge>
-              )
-            }
-          />
-          <p className="mt-3 text-xs leading-relaxed text-text-muted">
-            演示数据不参与同步；真实创作数据会先写本机，再作为可选备份上传云端。
-          </p>
-          <div className="mt-3.5 divide-y divide-border rounded-xl border border-border bg-surface-muted/40 px-3.5">
-            <div className="flex items-center justify-between gap-3 py-2.5">
-              <span className="text-xs text-text-secondary">同步开关</span>
-              <Badge variant={syncStatus ? 'success' : 'neutral'} size="sm">
-                {syncStatus ? '已启用' : '未配置'}
-              </Badge>
-            </div>
-            <div className="flex items-center justify-between gap-3 py-2.5">
-              <span className="shrink-0 text-xs text-text-secondary">上次同步时间</span>
-              <span className="num text-xs font-medium text-text">
-                {form.lastSyncAt ? new Date(form.lastSyncAt).toLocaleString('zh-CN') : '—'}
-              </span>
-            </div>
-          </div>
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            <Button
-              variant="secondary"
-              size="sm"
-              loading={syncing}
-              disabled={!syncStatus}
-              onClick={handleManualSync}
-            >
-              <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
-              手动同步
-            </Button>
-            {syncMessage && <span className="text-xs text-success">{syncMessage}</span>}
-          </div>
-        </Card>
-
-        {/* YouTube API 配置 */}
-        <Card padding="lg" className="anim-rise xl:col-span-2">
-          <SectionHeading title="YouTube Data API" hint="用于收集恐怖游戏热门视频（可选）" />
-          <div className="mt-3 space-y-2 text-xs leading-relaxed text-text-secondary">
-            <ol className="list-inside list-decimal space-y-1.5">
-              <li>
-                打开{' '}
-                <a href="https://console.cloud.google.com/" target="_blank" rel="noopener" className="text-primary hover:underline">
-                  Google Cloud Console
+      {/* ───────────────── 平台与数据源 ───────────────── */}
+      <section>
+        <GroupLabel>平台与数据源</GroupLabel>
+        <div className="grid gap-5 xl:grid-cols-2">
+          {/* 账号绑定配置 */}
+          <Card padding="lg" className="anim-rise flex flex-col">
+            <SectionHeading
+              title="账号绑定"
+              hint="填写后每天自动同步账号数据"
+              action={
+                <a href="/analytics" className="shrink-0 text-xs text-primary hover:underline">
+                  查看数据看板 →
                 </a>
-              </li>
-              <li>创建一个新项目（或选择已有项目）</li>
-              <li>在「API 和服务」中启用「YouTube Data API v3」</li>
-              <li>在「凭据」中创建 API Key</li>
-              <li>
-                填入 <code className="num rounded bg-surface-muted px-1 text-text">D:\自媒体之路\server\.env</code>:{' '}
-                <code className="num rounded bg-surface-muted px-1 text-text">YOUTUBE_API_KEY=你的key</code>
-              </li>
-              <li>重启后端服务</li>
-            </ol>
-            <p className="flex items-start gap-1.5 text-warning">
-              <Sparkles className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-              <span>
-                每天免费额度 <span className="num">10,000</span> 单位，足够日常使用。
-              </span>
+              }
+            />
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <Field label="B站 UID" hint={form.bilibiliName ? `✓ ${form.bilibiliName}` : undefined}>
+                <Input
+                  type="text"
+                  value={form.bilibiliUid || ''}
+                  onChange={(e) => setForm({ ...form, bilibiliUid: e.target.value })}
+                  placeholder="例如: 289518100"
+                />
+              </Field>
+              <Field label="抖音号" hint={form.douyinName ? `✓ ${form.douyinName}` : undefined}>
+                <Input
+                  type="text"
+                  value={form.douyinId || ''}
+                  onChange={(e) => setForm({ ...form, douyinId: e.target.value })}
+                  placeholder="例如: zgbwngbd"
+                />
+              </Field>
+              <Field label="内容方向">
+                <Input
+                  type="text"
+                  value={form.contentFocus}
+                  onChange={(e) => setForm({ ...form, contentFocus: e.target.value })}
+                />
+              </Field>
+              <Field label="活跃天数">
+                <Input
+                  type="number"
+                  value={form.daysActive}
+                  onChange={(e) => setForm({ ...form, daysActive: Number(e.target.value) })}
+                />
+              </Field>
+            </div>
+            <div className="mt-auto flex flex-wrap items-center gap-3 border-t border-border pt-4">
+              <Button variant="primary" size="sm" loading={saving} onClick={handleSave}>
+                保存配置
+              </Button>
+              {saved && <Badge variant="success">✓ 已保存</Badge>}
+            </div>
+          </Card>
+
+          {/* AI 配置状态 + 可选数据源 */}
+          <Card padding="lg" className="anim-rise flex flex-col">
+            <SectionHeading
+              title="AI 与数据源"
+              hint="选题评估、脚本生成与素材推荐都依赖它"
+              action={
+                aiConfigured ? (
+                  <Badge variant="success">已连接</Badge>
+                ) : (
+                  <Badge variant="warning">未配置</Badge>
+                )
+              }
+            />
+            <div className="mt-3.5">
+              <StatList>
+                <StatRow label="AI 服务">DeepSeek</StatRow>
+                <StatRow label="连接状态">
+                  <Badge variant={aiConfigured ? 'success' : 'warning'} size="sm">
+                    {aiConfigured ? '已连接' : '未配置'}
+                  </Badge>
+                </StatRow>
+                <StatRow label="视频数据源">
+                  <a
+                    href="https://console.cloud.google.com/"
+                    target="_blank"
+                    rel="noopener"
+                    className="text-primary hover:underline"
+                  >
+                    YouTube Data API（可选）→
+                  </a>
+                </StatRow>
+              </StatList>
+            </div>
+
+            <div className="mt-4 space-y-4 text-xs leading-relaxed text-text-secondary">
+              <div>
+                <p className="mb-1.5 font-medium text-text">AI（DeepSeek）配置步骤</p>
+                <ol className="list-inside list-decimal space-y-1">
+                  <li>
+                    注册 DeepSeek 平台账号:{' '}
+                    <a href="https://platform.deepseek.com/" target="_blank" rel="noopener" className="text-primary hover:underline">
+                      platform.deepseek.com
+                    </a>
+                  </li>
+                  <li>在 API Keys 页面创建一个新的 Key</li>
+                  <li>
+                    打开 <code className="num rounded bg-surface-muted px-1 text-text">D:\自媒体之路\server\.env</code>
+                  </li>
+                  <li>
+                    填入 <code className="num rounded bg-surface-muted px-1 text-text">DEEPSEEK_API_KEY=你的key</code>
+                  </li>
+                  <li>重启后端服务</li>
+                </ol>
+              </div>
+
+              <div className="border-t border-border pt-4">
+                <p className="mb-1.5 font-medium text-text">YouTube Data API 配置步骤（可选）</p>
+                <ol className="list-inside list-decimal space-y-1.5">
+                  <li>
+                    打开{' '}
+                    <a href="https://console.cloud.google.com/" target="_blank" rel="noopener" className="text-primary hover:underline">
+                      Google Cloud Console
+                    </a>
+                  </li>
+                  <li>创建一个新项目（或选择已有项目）</li>
+                  <li>在「API 和服务」中启用「YouTube Data API v3」</li>
+                  <li>在「凭据」中创建 API Key</li>
+                  <li>
+                    填入 <code className="num rounded bg-surface-muted px-1 text-text">YOUTUBE_API_KEY=你的key</code>
+                  </li>
+                  <li>重启后端服务</li>
+                </ol>
+                <p className="mt-2 flex items-start gap-1.5 text-warning">
+                  <Sparkles className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <span>
+                    每天免费额度 <span className="num">10,000</span> 单位，足够日常使用。
+                  </span>
+                </p>
+              </div>
+            </div>
+          </Card>
+        </div>
+      </section>
+
+      {/* ───────────────── 本机数据与备份 ───────────────── */}
+      <section>
+        <GroupLabel>本机数据与备份</GroupLabel>
+        <div className="grid gap-5 xl:grid-cols-2">
+          {/* 演示数据 */}
+          <Card padding="lg" className="anim-rise flex flex-col">
+            <SectionHeading
+              title="演示数据"
+              hint="一键让所有页面进入「有内容」的状态"
+              action={
+                demoCount > 0 ? (
+                  <Badge variant="success">已载入 {demoCount} 条</Badge>
+                ) : (
+                  <Badge variant="neutral">未载入</Badge>
+                )
+              }
+            />
+            <p className="mt-3 text-xs leading-relaxed text-text-muted">
+              演示数据包含 9 个选题（含已发布数据、AI 评估、素材方案与 6 份分镜脚本），
+              只写入本机 IndexedDB，<span className="text-text">不会进入云端同步</span>，
+              随时可以一键清空。第一次打开站点且本地为空时会自动载入。
             </p>
-          </div>
-        </Card>
-      </div>
+            <div className="mt-3.5">
+              <StatList>
+                <StatRow label="已载入演示数据">{demoCount} 条</StatRow>
+                <StatRow label="自动载入">
+                  <Badge variant={demoState === 'off' ? 'neutral' : 'success'} size="sm">
+                    {demoState === 'off' ? '已关闭' : '开启'}
+                  </Badge>
+                </StatRow>
+              </StatList>
+            </div>
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <Button variant="primary" size="sm" loading={demoBusy} onClick={handleSeedDemo}>
+                <Database className="h-3.5 w-3.5" aria-hidden="true" />
+                载入演示数据
+              </Button>
+              <Button
+                variant="dangerGhost"
+                size="sm"
+                disabled={demoBusy || demoCount === 0}
+                onClick={handleClearDemo}
+              >
+                <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                清空演示数据
+              </Button>
+            </div>
+            {demoMessage && <p className="mt-3 text-xs text-success">{demoMessage}</p>}
+          </Card>
+
+          {/* 云端同步 */}
+          <Card padding="lg" className="anim-rise flex flex-col">
+            <SectionHeading
+              title="云端同步"
+              hint="数据改动后 5 秒自动上传，换设备可恢复"
+              action={
+                syncStatus ? (
+                  <Badge variant="success">已启用</Badge>
+                ) : (
+                  <Badge variant="neutral">未配置</Badge>
+                )
+              }
+            />
+            <p className="mt-3 text-xs leading-relaxed text-text-muted">
+              演示数据不参与同步；真实创作数据会先写本机，再作为可选备份上传云端。
+            </p>
+            <div className="mt-3.5">
+              <StatList>
+                <StatRow label="同步开关">
+                  <Badge variant={syncStatus ? 'success' : 'neutral'} size="sm">
+                    {syncStatus ? '已启用' : '未配置'}
+                  </Badge>
+                </StatRow>
+                <StatRow label="上次同步时间">
+                  {form.lastSyncAt ? new Date(form.lastSyncAt).toLocaleString('zh-CN') : '—'}
+                </StatRow>
+              </StatList>
+            </div>
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <Button
+                variant="secondary"
+                size="sm"
+                loading={syncing}
+                disabled={!syncStatus}
+                onClick={handleManualSync}
+              >
+                <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                手动同步
+              </Button>
+              {syncMessage && <span className="text-xs text-success">{syncMessage}</span>}
+            </div>
+          </Card>
+        </div>
+      </section>
     </div>
   );
 }
