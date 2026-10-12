@@ -20,6 +20,8 @@ export const config = {
   // Cloud sync (Supabase)
   supabaseUrl: process.env.SUPABASE_URL || '',
   supabaseAnonKey: process.env.SUPABASE_ANON_KEY || '',
+  // 账号 token 的 HMAC 密钥；不配会自动生成并持久化到 server/data/auth-secret.txt
+  authSecret: process.env.AUTH_SECRET || '',
   // AI 每日调用上限（公网防刷，默认 300）
   aiDailyLimit: parsePositiveInt(process.env.AI_DAILY_LIMIT, 300),
 };

@@ -1,132 +1,124 @@
 import { Router } from 'express';
-import { supabase, isSupabaseConfigured, SYNC_TABLE } from '../services/supabaseClient.js';
+import type { Response } from 'express';
+import { isSupabaseConfigured } from '../services/supabaseClient.js';
+import { CloudError, readCloud, updateCloud } from '../services/cloudStore.js';
+import { requireAuth } from '../middleware/requireAuth.js';
+import type { AuthedRequest } from '../middleware/requireAuth.js';
+
+// ============================================
+// 云端同步（按账号隔离）
+//
+// 一个账号一份云端数据，存在 app_sync 那一行的 data.accounts[userId] 里。
+// /upload 与 /download 都需要 Bearer token（见 middleware/requireAuth.ts）：
+//   - 没有 token / token 过期 -> 401 { code: 'UNAUTHORIZED' }
+//   - 账号 A 读写不到账号 B 的数据（userId 来自 token，不接受请求体里传 userId）
+// /status 保持公开，前端启动时用它判断云端功能是否配置。
+// ============================================
 
 const router = Router();
 
-// Upload sync data (topics + scripts)
-router.post('/upload', async (req, res) => {
+function sendError(res: Response, err: unknown, fallbackMessage: string): void {
+  if (err instanceof CloudError) {
+    res.status(err.status).json({ error: err.message, code: err.code, ...(err.extra || {}) });
+    return;
+  }
+  console.error('[sync] unexpected error:', err);
+  res.status(500).json({ error: fallbackMessage, code: 'SERVER_ERROR' });
+}
+
+// 上传本账号的同步数据（topics + scripts）
+router.post('/upload', requireAuth, async (req, res) => {
   try {
-    if (!isSupabaseConfigured() || !supabase) {
-      return res.status(503).json({ error: '云端同步未配置', code: 'NOT_CONFIGURED' });
+    const authed = req as AuthedRequest;
+    const userId = authed.authUser?.id;
+    if (!userId) {
+      res.status(401).json({ error: '未登录或登录已过期', code: 'UNAUTHORIZED' });
+      return;
     }
 
-    const { topics, scripts, uploadedAt, baseUploadedAt } = req.body;
+    const body = (req.body || {}) as {
+      topics?: unknown;
+      scripts?: unknown;
+      uploadedAt?: unknown;
+      baseUploadedAt?: unknown;
+    };
+    const { topics, scripts, uploadedAt, baseUploadedAt } = body;
 
     if (!Array.isArray(topics) || !Array.isArray(scripts)) {
-      return res.status(400).json({ error: '数据格式错误', code: 'BAD_REQUEST' });
+      res.status(400).json({ error: '数据格式错误', code: 'BAD_REQUEST' });
+      return;
     }
 
     // ---- 乐观锁（可选）--------------------------------------------------
-    // 前端 creator-app/src/services/syncService.ts 目前 **还没有** 发送 record
-    // baseUploadedAt 字段，所以这个字段必须是可选的：
-    //   - 不传（undefined / null / 非有限数字）-> 完全保持原有行为，直接 upsert；
-    //   - 传了 -> 先读云端当前 uploaded_at，若云端更新（cloud > base）则拒绝覆盖。
-    // 这样后端可以先上线防止「静默失败覆盖云端」，等前端补齐字段后自动生效，
-    // 不会破坏现有前端。
+    // 前端传 baseUploadedAt（它上次看到的云端 uploadedAt）时：
+    //   - 本账号云端更新（cloud > base）-> 409 CONFLICT，让前端先下载再合并
+    // 不传则退回「直接覆盖」的旧行为，不会破坏现有前端。
     // ---------------------------------------------------------------------
     const hasBase = baseUploadedAt !== undefined && baseUploadedAt !== null && baseUploadedAt !== '';
     const base = hasBase ? Number(baseUploadedAt) : NaN;
 
-    if (Number.isFinite(base)) {
-      const { data: current, error: precheckError } = await supabase
-        .from(SYNC_TABLE)
-        .select('uploaded_at')
-        .eq('id', 1)
-        .maybeSingle();
+    const requestedUploadedAt = Number(uploadedAt);
+    const nextUploadedAt =
+      Number.isFinite(requestedUploadedAt) && requestedUploadedAt > 0 ? requestedUploadedAt : Date.now();
 
-      if (precheckError) {
-        console.error('[sync] upload pre-check failed:', precheckError.message, precheckError);
-        return res.status(502).json({
-          error: '云端查询失败: ' + precheckError.message,
-          code: 'CLOUD_ERROR',
-        });
+    const result = await updateCloud((blob) => {
+      const cloudUploadedAt = blob.accounts[userId]?.uploadedAt ?? 0;
+      if (Number.isFinite(base) && cloudUploadedAt > base) {
+        throw new CloudError(409, 'CONFLICT', '云端有更新，请先下载', { cloudUploadedAt });
       }
+      blob.accounts[userId] = { topics, scripts, uploadedAt: nextUploadedAt };
+      return { uploadedAt: nextUploadedAt };
+    });
 
-      const cloudUploadedAt = current ? Number(current.uploaded_at) || 0 : 0;
-      if (current && cloudUploadedAt > base) {
-        return res.status(409).json({
-          error: '云端有更新，请先下载',
-          code: 'CONFLICT',
-          cloudUploadedAt,
-        });
-      }
-    }
-
-    const nextUploadedAt = uploadedAt || Date.now();
-    const { error } = await supabase
-      .from(SYNC_TABLE)
-      .upsert({
-        id: 1,
-        data: { topics, scripts },
-        uploaded_at: nextUploadedAt,
-      });
-
-    if (error) {
-      console.error('[sync] upload error:', error.message, error);
-      return res.status(500).json({ error: '同步失败: ' + error.message, code: 'UPLOAD_FAILED' });
-    }
-
-    res.json({ success: true, uploadedAt: nextUploadedAt });
+    res.json({ success: true, uploadedAt: result.uploadedAt });
   } catch (err) {
-    console.error('[sync] upload exception:', err);
-    res.status(500).json({ error: '服务器错误', code: 'SERVER_ERROR' });
+    sendError(res, err, '同步失败');
   }
 });
 
-// Download sync data.
+// 下载本账号的同步数据。
 //
-// 返回语义（关键：绝不能把「查询失败」伪装成「云端为空」，否则前端会把本地
-// 数据上传覆盖云端）：
+// 返回语义（关键：绝不能把「查询失败」伪装成「云端为空」，否则前端会把本地数据
+// 上传覆盖云端）：
+//   401 + { code: 'UNAUTHORIZED' }                            未登录 / token 过期
 //   503 + { code: 'NOT_CONFIGURED' }                          云端未配置
 //   502 + { code: 'CLOUD_ERROR' }                             查询失败（已打日志）
-//   200 + { topics: [], scripts: [], uploadedAt: 0, empty: true }   查询成功但表里没有行
-//   200 + { topics, scripts, uploadedAt, empty: false }        查询成功且有数据
-router.get('/download', async (req, res) => {
+//   200 + { topics: [], scripts: [], uploadedAt: 0, empty: true }   该账号还没有云端数据
+//   200 + { topics, scripts, uploadedAt, empty: false }       有数据
+router.get('/download', requireAuth, async (req, res) => {
   try {
-    if (!isSupabaseConfigured() || !supabase) {
-      return res.status(503).json({ error: '云端同步未配置', code: 'NOT_CONFIGURED' });
+    const authed = req as AuthedRequest;
+    const userId = authed.authUser?.id;
+    if (!userId) {
+      res.status(401).json({ error: '未登录或登录已过期', code: 'UNAUTHORIZED' });
+      return;
     }
 
-    // 用 maybeSingle()：0 行时返回 data=null / error=null，
-    // 不会像 single() 那样把「没有行」报成 PGRST116 错误。
-    const { data, error } = await supabase
-      .from(SYNC_TABLE)
-      .select('data, uploaded_at')
-      .eq('id', 1)
-      .maybeSingle();
+    const { blob } = await readCloud();
+    const account = blob.accounts[userId];
+    const empty = !account || (account.uploadedAt === 0 && account.topics.length === 0 && account.scripts.length === 0);
 
-    if (error) {
-      console.error('[sync] download query failed:', error.message, error);
-      return res.status(502).json({
-        error: '云端查询失败: ' + error.message,
-        code: 'CLOUD_ERROR',
-      });
+    if (empty) {
+      res.json({ topics: [], scripts: [], uploadedAt: 0, empty: true });
+      return;
     }
 
-    if (!data) {
-      // 查询成功了，只是表里确实没有这一行。
-      return res.json({ topics: [], scripts: [], uploadedAt: 0, empty: true });
-    }
-
-    const syncData = (data.data || {}) as { topics?: any[]; scripts?: any[] };
-    const uploadedAt = Number(data.uploaded_at) || 0;
     res.json({
-      topics: syncData.topics || [],
-      scripts: syncData.scripts || [],
-      uploadedAt,
-      empty: uploadedAt === 0 && (syncData.topics || []).length === 0 && (syncData.scripts || []).length === 0,
+      topics: account.topics,
+      scripts: account.scripts,
+      uploadedAt: account.uploadedAt,
+      empty: false,
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error('[sync] download exception:', err);
-    res.status(502).json({ error: '云端查询失败: ' + message, code: 'CLOUD_ERROR' });
+    sendError(res, err, '云端查询失败');
   }
 });
 
-// Check if sync is configured
-router.get('/status', (req, res) => {
+// 云端功能是否配置（公开，不需要登录）
+router.get('/status', (_req, res) => {
   res.json({
     syncConfigured: isSupabaseConfigured(),
+    accountMode: true,
   });
 });
 

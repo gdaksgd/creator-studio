@@ -10,14 +10,17 @@
       4. API 404 contract        (unknown /api/* returns JSON, not index.html)
       5. rate-limit headers      (X-RateLimit-* present on /api/*)
       6. sync status endpoint    (/api/sync/status)
-      7. bundle is served        (hashed JS asset referenced by index.html)
-      8. password is gone        (bundle must not contain the old secret)
-      9. video stat endpoint     (/api/video/stat returns real data, own throttle)
-     10. category benchmark      (/api/benchmark ships only samples with size + window)
-     11. report generation       (/api/report/game-industry returns a sourced report)
-     12. report markdown export  (.md carries sample sizes, no unsourced numbers)
-     13. platform fit check      (/api/ai/evaluate-cover pure rules, every rule sourced)
-     14. public URL (optional)   (same checks through the tunnel)
+      7. auth status endpoint    (/api/auth/status reports authConfigured)
+      8. sync requires auth      (anonymous /api/sync/download -> 401 UNAUTHORIZED)
+      9. bundle is served        (hashed JS entry chunk referenced by index.html)
+     10. vendor chunk is served  (vendor-react chunk referenced by index.html)
+     11. password is gone        (bundle must not contain the old secret)
+     12. video stat endpoint     (/api/video/stat returns real data, own throttle)
+     13. category benchmark      (/api/benchmark ships only samples with size + window)
+     14. report generation       (/api/report/game-industry returns a sourced report)
+     15. report markdown export  (.md carries sample sizes, no unsourced numbers)
+     16. platform fit check      (/api/ai/evaluate-cover pure rules, every rule sourced)
+     17. public URL (optional)   (same checks through the tunnel)
 
     Usage:
         powershell -NoProfile -ExecutionPolicy Bypass -File tools\smoke-test.ps1
@@ -112,11 +115,32 @@ function Test-Site {
     Write-Check 'sync status endpoint' (($sync.Status -eq 200) -and ($sync.Body -match 'syncConfigured')) `
                 "HTTP $($sync.Status), $($sync.Body.Trim())"
 
+    $authStatus = Invoke-Probe "$Root/api/auth/status"
+    Write-Check 'auth status endpoint' (($authStatus.Status -eq 200) -and ($authStatus.Body -match 'authConfigured')) `
+                "HTTP $($authStatus.Status), $($authStatus.Body.Trim())"
+
+    # 2026-10-12: cloud data moved to per-account storage. These routes used to be
+    # world-readable and world-writable; they must now reject anonymous callers.
+    $guarded = Invoke-Probe "$Root/api/sync/download"
+    Write-Check 'sync requires auth' (($guarded.Status -eq 401) -and ($guarded.Body -match 'UNAUTHORIZED')) `
+                "HTTP $($guarded.Status), $($guarded.Body.Trim())"
+
     $assetMatch = [regex]::Match($index.Body, '/assets/index-[A-Za-z0-9_\-]+\.js')
     if ($assetMatch.Success) {
         $asset = Invoke-Probe "$Root$($assetMatch.Value)"
-        Write-Check 'bundle asset served' (($asset.Status -eq 200) -and ($asset.Body.Length -gt 100000)) `
+        # 2026-10-12: manualChunks split vendor out of the entry chunk, so the entry
+        # chunk is now ~30KB instead of ~400KB. Assert the entry chunk is served and
+        # non-trivial, then assert the vendor chunk referenced by index.html is served.
+        Write-Check 'bundle asset served' (($asset.Status -eq 200) -and ($asset.Body.Length -gt 10000)) `
                     "$($assetMatch.Value) HTTP $($asset.Status), $($asset.Body.Length) chars"
+        $vendorMatch = [regex]::Match($index.Body, '/assets/vendor-react-[A-Za-z0-9_\-]+\.js')
+        if ($vendorMatch.Success) {
+            $vendor = Invoke-Probe "$Root$($vendorMatch.Value)"
+            Write-Check 'vendor chunk served' (($vendor.Status -eq 200) -and ($vendor.Body.Length -gt 100000)) `
+                        "$($vendorMatch.Value) HTTP $($vendor.Status), $($vendor.Body.Length) chars"
+        } else {
+            Write-Check 'vendor chunk referenced' $false 'no /assets/vendor-react-*.js in index.html'
+        }
         Write-Check 'old password purged' (-not ($asset.Body -match [regex]::Escape($script:OldSecret))) `
                     'secret absent from bundle'
     } else {

@@ -6,8 +6,10 @@ import { fileURLToPath } from 'url';
 import { config } from './config.js';
 import { startScheduler } from './services/scheduler.js';
 import { rateLimit, dailyQuota } from './middleware/rateLimit.js';
+import { gzipJson, ensurePrecompressed, servePrecompressed } from './middleware/compression.js';
 import newsRoutes from './routes/news.js';
 import aiRoutes from './routes/ai.js';
+import authRoutes from './routes/auth.js';
 import syncRoutes from './routes/sync.js';
 import videoRoutes from './routes/video.js';
 import benchmarkRoutes from './routes/benchmark.js';
@@ -44,6 +46,9 @@ app.use(
 
 app.use(express.json({ limit: '2mb' }));
 
+// 传输层优化：/api/* 的 JSON 响应即时 gzip（静态产物走预压缩副本，见下方 express.static）
+app.use(gzipJson());
+
 // Health check (public, no rate limit)
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: Date.now() });
@@ -60,6 +65,17 @@ const benchmarkRefreshLimiter = rateLimit({ windowMs: 10 * 60 * 1000, max: 3 });
 const aiDailyQuota = dailyQuota({ limit: config.aiDailyLimit }); // AI 每日总配额，默认 300
 // 纯规则的封面/平台检查：前端在输入时实时复查（B站 + 抖音各一次请求），走独立宽松档
 const coverCheckRateLimiter = rateLimit({ windowMs: 60 * 1000, max: 120 });
+// 账号接口：注册卡得严一点（防批量刷号），登录宽一点（正常用户会手误）
+const registerRateLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 5,
+  message: '注册太频繁了，请稍后再试',
+});
+const loginRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 12,
+  message: '登录尝试太频繁了，请稍后再试',
+});
 
 // M4 · 封面/平台检查是纯规则引擎（不调 AI），前端会随敲随查，因此不能吃 AI 的 20/min 严格档；
 // 只有显式 useAI=true 的润色请求才回到 AI 严格档 + 每日配额。
@@ -94,6 +110,9 @@ app.use('/api/ai', (req, res, next) => {
 
 app.use('/api/news/collect', collectRateLimiter);
 
+app.use('/api/auth/register', registerRateLimiter);
+app.use('/api/auth/login', loginRateLimiter);
+
 app.use('/api/video', videoRateLimiter);
 
 // 强制重采要单独限流（比读接口严格得多），必须注册在 /api/benchmark 之前
@@ -105,6 +124,7 @@ app.use('/api', (req, res, next) => {
   const apiPath = req.originalUrl.split('?')[0];
   if (
     apiPath.startsWith('/api/ai') ||
+    apiPath.startsWith('/api/auth') ||
     apiPath === '/api/news/collect' ||
     apiPath.startsWith('/api/video') ||
     apiPath.startsWith('/api/benchmark')
@@ -118,6 +138,7 @@ app.use('/api', (req, res, next) => {
 // Routes
 app.use('/api/news', newsRoutes);
 app.use('/api/ai', aiRoutes);
+app.use('/api/auth', authRoutes);
 app.use('/api/sync', syncRoutes);
 app.use('/api/video', videoRoutes);
 app.use('/api/benchmark', benchmarkRoutes);
@@ -131,7 +152,21 @@ app.use('/api', (req, res) => {
 // Serve frontend static files (production mode)
 const frontendDist = path.join(__dirname, '..', 'public');
 if (fs.existsSync(frontendDist)) {
-  app.use(express.static(frontendDist));
+  // 带 hash 的产物可以长期强缓存；index.html / favicon 之类必须每次校验
+  const staticOptions: Parameters<typeof express.static>[1] = {
+    setHeaders: (res, filePath) => {
+      if (/[\\/]assets[\\/]/.test(filePath)) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      } else {
+        res.setHeader('Cache-Control', 'no-cache');
+      }
+    },
+  };
+
+  // 命中 .gz 预压缩副本时直接下发（比实时压缩省 CPU，也少一次磁盘读）
+  app.use(servePrecompressed(frontendDist));
+  app.use(express.static(frontendDist, staticOptions));
+
   // SPA fallback: all non-API GET routes serve index.html
   // 用 app.use 而不是 app.get('*')，这样 Express 5 下也不会抛 path-to-regexp 错误
   app.use((req, res, next) => {
@@ -139,7 +174,9 @@ if (fs.existsSync(frontendDist)) {
       next();
       return;
     }
-    res.sendFile(path.join(frontendDist, 'index.html'));
+    res.sendFile(path.join(frontendDist, 'index.html'), {
+      headers: { 'Cache-Control': 'no-cache' },
+    });
   });
 }
 
@@ -152,8 +189,18 @@ app.listen(config.port, () => {
   console.log(`AI daily limit: ${config.aiDailyLimit}`);
   console.log(`YouTube: ${config.youtubeApiKey ? 'Configured' : 'Not configured (set YOUTUBE_API_KEY in .env)'}`);
   console.log(`Supabase: ${config.supabaseUrl ? 'Configured' : 'Not configured (set SUPABASE_URL in .env)'}`);
+  console.log(`云账号: ${config.supabaseUrl ? '已启用（一人一份云端数据）' : '未启用（缺少 Supabase 配置）'}`);
   console.log(`Frontend: ${fs.existsSync(frontendDist) ? 'Serving from /public' : 'Not built (run frontend build first)'}`);
   console.log('');
+
+  // 启动时为静态产物补齐 .gz 预压缩副本（已存在且没过期的会跳过）
+  if (fs.existsSync(frontendDist)) {
+    void ensurePrecompressed(frontendDist)
+      .then(({ created, skipped }) => {
+        if (created > 0) console.log(`[static] 生成 ${created} 个 .gz 预压缩文件（跳过 ${skipped} 个）`);
+      })
+      .catch((err) => console.warn('[static] 预压缩失败，不影响正常访问:', err));
+  }
 
   // Start scheduled collection
   startScheduler();
