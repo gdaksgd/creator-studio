@@ -28,6 +28,7 @@ import { PageHeader, SectionHeading } from '../components/ui/PageHeader';
 import { SourceNote } from '../components/ui/SourceNote';
 import { Stat } from '../components/ui/Stat';
 import { categoryEmoji, categoryLabel } from '../config/categories';
+import { loadWithCache } from '../services/queryCache';
 import { useTopicStore } from '../store/topicStore';
 import type {
   CompetitionIntensity,
@@ -109,21 +110,33 @@ export default function Report() {
   const [report, setReport] = useState<GameIndustryReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [cachedAt, setCachedAt] = useState<number | null>(null);
+  const [fromCache, setFromCache] = useState(false);
   const topics = useTopicStore((s) => s.topics);
   const loadTopics = useTopicStore((s) => s.loadTopics);
 
-  const load = useCallback(async () => {
+  /**
+   * 取报告。
+   *
+   * 报告来自最近一次 B 站快照，一小时内的重复打开拿到的必然是同一份数据，
+   * 却每次都要重传 32KB（公网隧道下体感更明显）。所以走小时级本地缓存：
+   * 缓存新鲜就直接渲染、不发请求；点「刷新」时 force=true 强制回源。
+   */
+  const load = useCallback(async (force = false) => {
     setLoading(true);
     setError(null);
     try {
-      const res = await api.getReport();
-      setReport(res.report);
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 503) {
-        // 503 = 样本还没采到。后端给的是 NOT_READY，不是空报告。
-        setError(`报告暂不可用：${e.message}`);
-      } else {
-        setError(e instanceof Error ? e.message : '报告加载失败');
+      const res = await loadWithCache('report:game-industry:default', () => api.getReport(), { force });
+      if (res.data) setReport(res.data.report);
+      setCachedAt(res.fetchedAt);
+      setFromCache(res.fromCache);
+      if (res.error) {
+        if (res.error instanceof ApiError && res.error.status === 503) {
+          // 503 = 样本还没采到。后端给的是 NOT_READY，不是空报告。
+          setError(`报告暂不可用：${res.error.message}`);
+        } else {
+          setError(res.error instanceof Error ? res.error.message : '报告加载失败');
+        }
       }
     } finally {
       setLoading(false);
@@ -153,7 +166,9 @@ export default function Report() {
     [report],
   );
 
-  if (loading) {
+  // 只有「手里还没有报告」时才占满整页显示生成中；点刷新时保留已有报告，
+  // 不要在等新数据的几百毫秒里把整页内容清空。
+  if (loading && !report) {
     return (
       <div className="space-y-6">
         <PageHeader
@@ -189,7 +204,7 @@ export default function Report() {
             报告的数据来自 B站热门榜与搜索接口的一次快照。采集完成前，本页不会用 0 或占位数字顶替。
           </p>
           <div>
-            <Button size="sm" onClick={() => void load()}>
+            <Button size="sm" onClick={() => void load(true)}>
               <RefreshCw className="h-3.5 w-3.5" />
               重新加载
             </Button>
@@ -219,11 +234,20 @@ export default function Report() {
             ) : (
               ''
             )}
+            {fromCache && cachedAt ? (
+              <>
+                　·　本机缓存于{' '}
+                <span className="num">{new Date(cachedAt).toLocaleTimeString('zh-CN')}</span>
+                （每小时自动回源）
+              </>
+            ) : (
+              ''
+            )}
           </>
         }
         actions={
           <>
-            <Button variant="secondary" size="sm" onClick={() => void load()}>
+            <Button variant="secondary" size="sm" onClick={() => void load(true)} loading={loading}>
               <RefreshCw className="h-3.5 w-3.5" />
               刷新
             </Button>
@@ -237,6 +261,12 @@ export default function Report() {
           </>
         }
       />
+
+      {error && (
+        <p className="rounded-xl border border-border bg-surface px-3 py-2 text-xs text-text-secondary">
+          刷新失败（{error}），下面是本机缓存的上一次报告。
+        </p>
+      )}
 
       {/* 概览指标：全部由报告自身字段派生，未新增任何数据来源 */}
       <section className="stagger-children grid gap-3 sm:grid-cols-2 xl:grid-cols-4">

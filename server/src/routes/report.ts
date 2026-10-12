@@ -42,6 +42,9 @@ router.get('/game-industry', (req, res) => {
     res.status(400).json({ ok: false, error, code: 'BAD_INPUT' });
     return;
   }
+  // 报告只随 B 站快照变化，前端按「一小时回源一次」自己缓存。这里显式禁用
+  // 浏览器 HTTP 缓存，避免两套缓存打架（点「刷新」却拿到浏览器缓存的旧报告）。
+  res.setHeader('Cache-Control', 'no-store');
   try {
     const report = buildGameIndustryReport(days);
     if (!report.ready) {

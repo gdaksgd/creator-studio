@@ -9,7 +9,8 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { LoadingBlock } from '../components/ui/Spinner';
 import { Stat } from '../components/ui/Stat';
 import { cn } from '../utils/cn';
-import { BookmarkPlus, Check, Flame, Languages, Newspaper, Radar, Radio } from 'lucide-react';
+import { clearCache, loadWithCache } from '../services/queryCache';
+import { BookmarkPlus, Check, Flame, Languages, Newspaper, Radar, Radio, RefreshCw } from 'lucide-react';
 
 const SOURCE_LABELS: Record<string, string> = {
   rss: 'RSS',
@@ -80,28 +81,55 @@ export default function InfoCenter() {
   const [collecting, setCollecting] = useState(false);
   const [retranslating, setRetranslating] = useState(false);
   const [lastCollected, setLastCollected] = useState<number | null>(null);
+  const [cachedAt, setCachedAt] = useState<number | null>(null);
+  const [fromCache, setFromCache] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [filter, setFilter] = useState<string>('all');
   const [sourceFilter, setSourceFilter] = useState<'all' | 'youtube' | 'bilibili' | 'rss'>('all');
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
-  const loadNews = useCallback(async () => {
-    setLoading(true);
-    try {
-      const data = await api.getNews({
-        category: filter === 'all' ? undefined : filter,
-        sourceType: sourceFilter === 'all' ? undefined : sourceFilter,
-        // 拉取全部（数据库上限 500），否则较早的 YouTube 等来源会被分页截断看不到
-        limit: 500,
-      });
-      setNews(data.news);
-      setVisibleCount(PAGE_SIZE);
-      setLastCollected(data.lastCollected);
-    } catch (err) {
-      console.error('Failed to load news:', err);
-    } finally {
-      setLoading(false);
-    }
-  }, [filter, sourceFilter]);
+  /**
+   * 取资讯列表。
+   *
+   * 走小时级本地缓存（key 里带筛选条件，各筛选互不覆盖）：一小时内的重复
+   * 打开、切页面、切回来都不再请求接口，直接用上次的数据渲染；force=true
+   * 时（点「刷新」、刚采集完、刚重新翻译完）绕过缓存回源。
+   */
+  const loadNews = useCallback(
+    async (force = false) => {
+      const key = `news:${filter}:${sourceFilter}:500`;
+      setLoading(true);
+      try {
+        const res = await loadWithCache(
+          key,
+          () =>
+            api.getNews({
+              category: filter === 'all' ? undefined : filter,
+              sourceType: sourceFilter === 'all' ? undefined : sourceFilter,
+              // 拉取全部（数据库上限 500），否则较早的 YouTube 等来源会被分页截断看不到
+              limit: 500,
+            }),
+          { force },
+        );
+        if (res.data) {
+          setNews(res.data.news);
+          setVisibleCount(PAGE_SIZE);
+          setLastCollected(res.data.lastCollected);
+          setCachedAt(res.fetchedAt);
+          setFromCache(res.fromCache);
+        }
+        if (res.error) {
+          console.error('Failed to load news:', res.error);
+          setLoadError(res.error instanceof Error ? res.error.message : '资讯加载失败');
+        } else {
+          setLoadError(null);
+        }
+      } finally {
+        setLoading(false);
+      }
+    },
+    [filter, sourceFilter],
+  );
 
   useEffect(() => {
     loadNews();
@@ -111,7 +139,9 @@ export default function InfoCenter() {
     setCollecting(true);
     try {
       await api.collectNews();
-      await loadNews();
+      // 刚采回来的资讯必须重新拉，缓存里的旧列表要作废
+      await clearCache('news:');
+      await loadNews(true);
     } catch (err) {
       alert('收集失败: ' + (err as Error).message);
     } finally {
@@ -124,7 +154,8 @@ export default function InfoCenter() {
     setRetranslating(true);
     try {
       const result = await api.retranslate();
-      await loadNews();
+      await clearCache('news:');
+      await loadNews(true);
       alert(`已重新翻译 ${result.translated}/${result.total} 条标题`);
     } catch (err) {
       alert('重新翻译失败: ' + (err as Error).message);
@@ -173,6 +204,10 @@ export default function InfoCenter() {
             <Button onClick={handleCollect} loading={collecting}>
               <Radar className="h-4 w-4" aria-hidden="true" />
               {collecting ? '收集中...' : '立即收集'}
+            </Button>
+            <Button variant="secondary" onClick={() => void loadNews(true)} loading={loading}>
+              <RefreshCw className="h-4 w-4" aria-hidden="true" />
+              刷新
             </Button>
             <Button variant="secondary" onClick={handleRetranslate} loading={retranslating}>
               <Languages className="h-4 w-4" aria-hidden="true" />
@@ -253,12 +288,21 @@ export default function InfoCenter() {
             </button>
           ))}
         </div>
-        <span className="num ml-auto shrink-0 text-xs text-text-muted">
-          {news.length} 条
+        <span
+          className="num ml-auto shrink-0 text-xs text-text-muted"
+          title="资讯每小时自动回源一次，期间直接用本机缓存；点「刷新」可立刻回源"
+        >
+          {fromCache && cachedAt ? `缓存 · ${timeAgo(cachedAt)}` : '刚刚更新'} · {news.length} 条
         </span>
       </div>
 
-      {loading ? (
+      {loadError && news.length > 0 && (
+        <p className="mb-4 rounded-xl border border-border bg-surface px-3 py-2 text-xs text-text-secondary">
+          刷新失败（{loadError}），下面是本机缓存的上一次结果。
+        </p>
+      )}
+
+      {loading && news.length === 0 ? (
         <LoadingBlock label="正在读取本地资讯…" />
       ) : news.length === 0 ? (
         <EmptyState

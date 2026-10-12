@@ -19,6 +19,11 @@ router.get('/', (req, res) => {
     news = news.filter((n) => n.sourceType === sourceType);
   }
 
+  // 资讯由服务端定时采集（默认每 6 小时一次），前端按「一小时回源一次」自己
+  // 缓存。这里显式禁用浏览器 HTTP 缓存，避免出现两套缓存打架：点「刷新」时
+  // 强制回源却拿到浏览器缓存里的旧 JSON。
+  res.setHeader('Cache-Control', 'no-store');
+
   res.json({
     news: news.slice(0, limit),
     total: news.length,

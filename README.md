@@ -103,7 +103,7 @@
 | 分析报告 | **5 个维度、64 个数字、0 个无出处**；Markdown 导出 6059 字符 | `GET /api/report/game-industry(.md)`，导出件带 ASCII 自检标记 |
 | 平台适配规则 | **最多 4 条规则，`sourced === total`（4/4 带出处）**，A/B/C 证据分级 | `pure-rules-v1` 纯规则引擎，**不配置 AI 也能给出全部结论** |
 | 预测校准（真实案例） | 1 条已发布视频：播放 **1312**、点赞 34、评论 42；点赞率 **2.59%**（34/1312）；对照卡牌品类点赞率中位 **2.63%**（n=30） | 发布后从 B站公开接口取回，逐条比率取中位（与报告口径一致） |
-| 质量闸门 | 端到端冒烟 **60 项断言**（本地 + 公网各 30 项）、前后端 `tsc` 全绿、hooks 静态体检 0 命中、浏览器回归 25 项 | `tools/smoke-test.ps1` / `tools/hooks-audit.mjs` / `tools/panel-e2e.mjs`，全过退出码 0 |
+| 质量闸门 | 端到端冒烟 **66 项断言**（本地 + 公网各 33 项）、前后端 `tsc` 全绿、hooks 静态体检 0 命中、浏览器回归 25 项、缓存行为回归 18 项 | `tools/smoke-test.ps1` / `tools/hooks-audit.mjs` / `tools/panel-e2e.mjs` / `tools/hourly-cache.mjs`，全过退出码 0 |
 
 > 这份报告也暴露了工具自己的短板，并写在报告正文而不是藏起来：无法自动列出自己账号的全部视频（B站 `/x/space/wbi/arc/search` 稳定返回 `-352 风控校验失败`），所以采用「粘贴链接精确取数」；时长曲线的每个桶至少 10 条样本，冷启动期曲线会缺段。
 
@@ -115,13 +115,13 @@
 
 | 模块 | 说明 |
 |---|---|
-| **资讯中心** | 定时从 RSS / YouTube / B站 / Steam 采集资讯与热门视频，按品类自动落桶，一键存为选题 |
+| **资讯中心** | 定时从 RSS / YouTube / B站 / Steam 采集资讯与热门视频，按品类自动落桶，一键存为选题；页面数据有**一小时本地缓存**，一小时内再打开不再回源（提示「缓存 · 几分钟前」），点「刷新」可立刻回源 |
 | **选题看板** | 按品类筛选、按优先级排序；状态流转（想法 → 调研 → 已通过 → 写脚本 → 已完成 → 已发布），发布后粘贴链接即可回填真实数据 |
 | **脚本编辑器** | 结构化脚本编辑（开场钩子 / 分镜 / 结尾），AI 生成选题评估与标题评分，支持重新生成与历史保留 |
 | **平台适配检查** | 粘贴标题与封面文案，选 B站 或抖音，输出最多 4 条带出处与 A/B/C 证据等级的结论（拿不到输入的规则直接不出现，不排占位行）；没配 AI 也能跑，AI 只在你点按钮时润色文案。填的封面文案**填了就存进这条脚本**（关页面、刷新、换脚本再回来都还在），停手 400ms 自动复查一次，也可以点「填写完毕」立刻复查 |
 | **预测校准** | AI 预估播放 vs B站 真实播放：平均绝对偏差、系统性高估/低估、逐条对比；缺数据的样本单列，不补 0 |
 | **品类基准线** | 从真实样本算出各品类播放分位与互动率水位线，强制显示样本量与时间窗；AI 结论据此带上「数据依据」 |
-| **分析报告** | 《B站游戏区内容分析报告》：品类竞争强度 / TOP 作品标题模式 / 时长–互动率 / 发布时段分布 + 对自己选题的建议；每个数字带样本量与口径，可导出 Markdown |
+| **分析报告** | 《B站游戏区内容分析报告》：品类竞争强度 / TOP 作品标题模式 / 时长–互动率 / 发布时段分布 + 对自己选题的建议；每个数字带样本量与口径，可导出 Markdown。报告接口同样**一小时本地缓存**，避免每次打开都重传整份报告 |
 | **素材库** | 收藏图片 / 视频 / 链接素材，按品类与类型归档 |
 | **账号运营** | 追踪各平台账号数据，AI 生成运营建议 |
 | **数据同步** | 本地 IndexedDB 优先，云端按**账号**隔离（一人一份快照）；注册 / 登录 / 退出、乐观锁冲突检测、失败不误覆盖 |
@@ -351,7 +351,7 @@ powershell -ExecutionPolicy Bypass -File autostart.ps1
 | `start-frontend.bat` / `start-backend.bat` | 单独启动，前台可见日志，调试用 |
 | `build.ps1` | 只做生产构建（构建前先跑 React hooks 顺序体检），产物复制到 `server/public` |
 | `tools/hooks-audit.mjs` | React hooks 顺序静态体检，拦截「early return 之后调用 hook」这种 `tsc` 抓不到、但会让整页白屏的运行期错误 |
-| `selfcheck.bat` / `tools/smoke-test.ps1` | 冒烟测试：本地 :3001 + 公网域名共 60 项断言，全过退出码 0 |
+| `selfcheck.bat` / `tools/smoke-test.ps1` | 冒烟测试：本地 :3001 + 公网域名各 33 项断言，全过退出码 0 |
 | `tools/panel-e2e.mjs` | 浏览器端回归：无头 Edge + CDP 驱动真实页面，验证平台适配检查面板「填了就存 / 刷新还在 / 输入即复查 / 只保留能真判断的规则行」（25 项断言，需本机装有 Edge） |
 
 ### 从零开始
@@ -386,7 +386,7 @@ powershell -ExecutionPolicy Bypass -File autostart.ps1
 ├─ start-tunnel.bat            只启 Cloudflare 隧道
 ├─ start-frontend.bat / start-backend.bat   单独启动，前台可见日志
 ├─ stop.bat                    停止全部
-├─ selfcheck.bat               一键冒烟自检（本地 + 公网 60 项）
+├─ selfcheck.bat               一键冒烟自检（本地 + 公网各 33 项）
 ├─ supabase-schema.sql        建表脚本
 │
 ├─ creator-app/               前端 React + TS + Vite
@@ -394,6 +394,7 @@ powershell -ExecutionPolicy Bypass -File autostart.ps1
 │     ├─ config/categories.ts ★ 品类单一事实来源
 │     ├─ api/client.ts         接口封装（含 ApiError 业务错误码）
 │     ├─ services/syncService.ts  同步策略：乐观锁 / 冲突转下载
+│     ├─ services/queryCache.ts   资讯/报告的一小时本地缓存（独立 IndexedDB 库，不动用户数据库）
 │     ├─ db/                   Dexie 本地库
 │     ├─ store/                Zustand 状态
 │     ├─ components/PlatformCheckPanel.tsx  平台适配检查面板（逐条规则带出处 + A/B/C 证据等级）
@@ -404,7 +405,7 @@ powershell -ExecutionPolicy Bypass -File autostart.ps1
 │  ├─ src/
 │  │  ├─ index.ts              入口：CORS 白名单 / 分层限流 / 静态托管 / SPA 兜底
 │  │  ├─ middleware/rateLimit.ts  零依赖内存限流 + 每日配额
-│  │  ├─ routes/               ai / news / sync / video / benchmark / report
+│  │  ├─ routes/               ai / ai-config / news / sync / video / benchmark / report
 │  │  ├─ services/collectors/  RSS / YouTube / B站 / Steam 采集器（+ 基准线采集器）
 │  │  ├─ services/aiService.ts AI 能力封装
 │  │  ├─ services/platformRules.ts      平台规则引擎：4 条规则 + A/B/C 证据等级（零依赖，不调 AI 也能跑）
@@ -417,8 +418,9 @@ powershell -ExecutionPolicy Bypass -File autostart.ps1
 │  └─ .env                    密钥（gitignore，切勿提交）
 │
 ├─ tools/                     运维与测试脚本（node/node.exe 与 cloudflared/ 体积过大未提交，见 .gitignore）
-│  ├─ smoke-test.ps1          端到端冒烟测试（60 项断言）
+│  ├─ smoke-test.ps1          端到端冒烟测试（本地 + 公网各 33 项）
 │  ├─ panel-e2e.mjs           浏览器端回归：无头 Edge + CDP（25 项断言）
+│  ├─ hourly-cache.mjs        资讯/报告一小时缓存的行为验收（18 项断言）
 │  ├─ hooks-audit.mjs         React hooks 顺序静态体检
 │  ├─ backup.ps1              每日备份（失败保护 + 30 天保留）
 │  └─ keepalive.ps1           Supabase 保活 + 备份
@@ -484,16 +486,18 @@ schtasks /run   /tn "CreatorStudio-SupabaseKeepAlive"
 - **免费隧道无 SLA**：Cloudflare 免费版不保证可用性
 - **Supabase 免费版**：7 天无活动会暂停（已有每日保活）
 - **云端单行快照**：`app_sync` 表固定 `id=1` 一行，设计目标是个人多设备同步，**不支持多人协作**
-- **测试覆盖薄**：有端到端冒烟测试（`selfcheck.bat`，60 项断言）、hooks 静态体检，以及一个不引入新依赖的浏览器端回归（`tools/panel-e2e.mjs`，无头 Edge + CDP，25 项断言）；但**仍无单元测试框架**，浏览器回归目前也只盯平台适配检查这一个面板，且依赖本机装有 Edge
+- **测试覆盖薄**：有端到端冒烟测试（`selfcheck.bat`，66 项断言）、hooks 静态体检，以及两个不引入新依赖的浏览器端回归（`tools/panel-e2e.mjs` 25 项 + 小时缓存回归 18 项，无头 Edge + CDP）；但**仍无单元测试框架**，浏览器回归也只盯平台适配检查与缓存这两条链路，且依赖本机装有 Edge
 - **基准线是头部样本口径**：热门榜只覆盖各分区头部内容，不是全量分布；品类线取「近 30 天按播放排序」，天然偏头部。界面已标注口径，**不可当作全量播放分布**
 - **部分互动指标拿不到**：B站搜索接口不返回投币数与分享数，品类级基准线只有点赞率与收藏率
 - **基准线有 6 小时缓存**：为避免触发 B站风控，同一次采集结果缓存 6 小时，不做实时刷新
+- **页面一小时缓存 ≠ 数据每小时更新**：资讯 / 报告页面的本地缓存只解决「每次打开都重传」的速度问题（一小时内不重复请求，点「刷新」可立刻回源）；**数据本身的新鲜度取决于服务端采集频率**——资讯采集默认 6 小时一轮（`COLLECT_INTERVAL`），基准线与报告样本池也是 6 小时一采。原因见下条
+- **YouTube 配额卡住了采集频率**：一次 `search.list` 要 100 单位配额，一轮采集最多 20 个关键词 ≈ 2000 单位，而每日默认配额只有 10,000 单位（≈ 5 轮）——6 小时一轮（每天 4 轮）已经接近上限，日志里偶发 429 就是配额打满
 - **无法自动列出自己账号的全部视频**：B站 `/x/space/wbi/arc/search` 稳定返回 `-352`，因此采用「粘贴视频链接」的精确取数，不依赖登录态
 - **报告中的因果关系全是相关性**：时长–互动率、发布时段都是观测相关性，样本又偏头部，不能当作因果结论；报告里每个维度都写了 caveat
 - **样本门槛会挡住小样本结论**：时长曲线每桶至少 10 条、标题与时段至少 20 条、品类至少 15 条，低于门槛的维度不出数字
 - **关键词不是分词**：用「极大重复子串 + 词频」统计（最长 6 字，无词典、已去停用词），只能说「这批标题在反复说什么」，**不等于语义主题分析**
 - **只支持默认 30 天口径**：报告接口对其它 `days` 值返回 400 而不是静默按 30 天算——搜索池只按 30 天窗口采集，报别的数字就是撒谎
-- **前端体积**：单 bundle 约 466 KB（gzip 约 137 KB），未做路由级代码分割
+- **前端体积**：已做路由级代码分割与图表懒加载——入口 chunk 约 36 KB（gzip 约 15 KB），React / Dexie / 工具库各自独立 chunk，图表（`charts` chunk，391 KB）只在打开「数据看板」时才加载；vite 开启了 `manualChunks` 分包，但**没有 Service Worker 离线能力**
 - **平台规则里的阈值部分是自定义的**：「强情绪词」词表、「标题党词」词表、「1–2 条/周」这类阈值是本项目自己定的（界面标为 C 级），**不是平台算法，也不该拿去当 KPI**
 - **封面检查只读文案，不分析像素**：需要图像处理依赖才能做的部分（清晰度/色彩/亮度）明确不做，面板里也写明了
 - **发布后指标不在这里判断**：CTR 与完播率都要真实发布数据，B站/抖音 都没有公开接口；v1.5.2 起这两项连同「计划更新频率」一起从平台适配检查里删除——它们属于数据看板与报告，不属于写脚本时的检查
