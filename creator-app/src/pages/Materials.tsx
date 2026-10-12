@@ -4,12 +4,20 @@ import { useScriptStore } from '../store/scriptStore';
 import { api } from '../api/client';
 import type { Script, MaterialPlan, SceneMaterialAnalysis, SceneMaterialCategory, MaterialRecommendation, MaterialType } from '../types';
 import { categoryBadge, categoryEmoji, categoryLabel } from '../config/categories';
+import { EmptyState } from '../components/ui/EmptyState';
+import { Badge } from '../components/ui/Badge';
+import { Button } from '../components/ui/Button';
+import { Card } from '../components/ui/Card';
+import { Field, Select } from '../components/ui/Input';
+import { PageHeader, SectionHeading } from '../components/ui/PageHeader';
+import { LoadingBlock } from '../components/ui/Spinner';
+import { ArrowLeft, Images, Sparkles, TriangleAlert, Wand2 } from 'lucide-react';
 
 const MATERIAL_META: Record<MaterialType, { label: string; icon: string; color: string; bg: string; border: string; text: string }> = {
-  bgm: { label: 'BGM', icon: '🎵', color: 'emerald', bg: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-700' },
-  sfx: { label: '音效', icon: '🔊', color: 'blue', bg: 'bg-blue-50', border: 'border-blue-200', text: 'text-blue-700' },
-  meme: { label: '表情包', icon: '😂', color: 'orange', bg: 'bg-orange-50', border: 'border-orange-200', text: 'text-orange-700' },
-  animation: { label: '动画素材', icon: '✨', color: 'purple', bg: 'bg-purple-50', border: 'border-purple-200', text: 'text-purple-700' },
+  bgm: { label: 'BGM', icon: '🎵', color: 'emerald', bg: 'bg-success-soft', border: 'border-success/30', text: 'text-success' },
+  sfx: { label: '音效', icon: '🔊', color: 'blue', bg: 'bg-info-soft', border: 'border-info/30', text: 'text-info' },
+  meme: { label: '表情包', icon: '😂', color: 'orange', bg: 'bg-warning-soft', border: 'border-warning/30', text: 'text-warning' },
+  animation: { label: '动画素材', icon: '✨', color: 'purple', bg: 'bg-primary-soft', border: 'border-primary/30', text: 'text-primary' },
 };
 
 export default function Materials() {
@@ -103,32 +111,45 @@ export default function Materials() {
   };
 
   // ===== 渲染 =====
+  // 页面头在加载 / 列表 / 详情三种视图之间共用，避免标题与说明重复书写
+  const pageHeader = (
+    <PageHeader
+      eyebrow="创作台 / MATERIALS"
+      title="素材工坊"
+      description="选择已有脚本的选题，AI 帮你分析每个分镜需要的 BGM、音效、表情包和动画素材"
+    />
+  );
+
   if (loading) {
-    return <div className="text-center py-20 text-text-secondary">加载中...</div>;
+    return (
+      <div>
+        {pageHeader}
+        <LoadingBlock label="正在读取本地选题…" />
+      </div>
+    );
   }
 
   // --- 列表视图 ---
   if (!selectedTopic) {
     return (
       <div>
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold mb-1">素材工坊</h1>
-          <p className="text-text-secondary text-sm">
-            选择已有脚本的选题，AI 帮你分析每个分镜需要的 BGM、音效、表情包和动画素材
-          </p>
-        </div>
+        {pageHeader}
+
+        <SectionHeading title="可分析的选题" hint={`${topicsWithScripts.length} 个`} />
 
         {topicsWithScripts.length === 0 ? (
-          <div className="text-center py-20 text-text-secondary">
-            <p className="text-lg mb-2">暂无可用选题</p>
-            <p className="text-sm">需要先在选题看板创建选题，并在脚本编辑中添加分镜</p>
-          </div>
+          <EmptyState
+            icon={<Images className="h-5 w-5" />}
+            title="暂无可用选题"
+            description="需要先在选题看板创建选题，并在脚本编辑里加上分镜，这里才能生成素材方案。"
+          />
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="stagger-children grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {topicsWithScripts.map((topic) => {
               const topicScripts = scripts.filter((s) => s.topicId === topic.id && s.storyboards.length > 0);
               const hasPlan = !!topic.materialPlan;
               const selectedCount = topic.materialPlan ? getSelectedCount(topic.materialPlan) : 0;
+              const storyboardCount = topicScripts.reduce((sum, s) => sum + s.storyboards.length, 0);
               return (
                 <button
                   key={topic.id}
@@ -137,27 +158,39 @@ export default function Materials() {
                     const firstScript = topicScripts[0];
                     setSelectedScriptId(firstScript?.id || '');
                   }}
-                  className="text-left bg-surface border border-border rounded-xl p-5 hover:border-primary hover:shadow-md transition-all"
+                  className="card card-hover group flex flex-col overflow-hidden p-0 text-left"
                 >
-                  <div className="flex items-center gap-2 mb-3">
-                    <span className={`text-xs px-2 py-0.5 rounded-full border ${categoryBadge(topic.category)}`}>
-                      {categoryEmoji(topic.category)} {categoryLabel(topic.category)}
+                  {/* 封面位：数据里没有图片字段，用品牌柔光底 + 品类符号做视觉区分，不编造素材图 */}
+                  <div className="relative aspect-video overflow-hidden bg-brand-soft">
+                    <div className="texture-grid absolute inset-0" aria-hidden="true" />
+                    <span
+                      className="absolute inset-0 flex items-center justify-center text-4xl transition-transform duration-300 group-hover:scale-[1.03]"
+                      aria-hidden="true"
+                    >
+                      {categoryEmoji(topic.category)}
                     </span>
                     {hasPlan && (
-                      <span className="text-xs px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200">
+                      <Badge variant="success" size="sm" className="absolute right-3 top-3 shadow-xs">
                         已分析
-                      </span>
+                      </Badge>
                     )}
                   </div>
-                  <h3 className="font-semibold text-base mb-1 line-clamp-2">{topic.title}</h3>
-                  <p className="text-sm text-text-secondary mb-3">
-                    {topicScripts.length} 个脚本 · {topicScripts.reduce((sum, s) => sum + s.storyboards.length, 0)} 个分镜
-                  </p>
-                  {hasPlan && (
-                    <p className="text-xs text-green-600 font-medium">
-                      已选用 {selectedCount} 个素材
+
+                  <div className="flex flex-1 flex-col p-4">
+                    <span className={`mb-2 inline-flex w-fit items-center rounded-full border px-2 py-0.5 text-xs ${categoryBadge(topic.category)}`}>
+                      {categoryEmoji(topic.category)} {categoryLabel(topic.category)}
+                    </span>
+                    <h3 className="truncate text-sm font-medium tracking-tight text-text">{topic.title}</h3>
+                    <p className="mt-1.5 text-xs text-text-muted">
+                      <span className="num">{topicScripts.length}</span> 个脚本 ·{' '}
+                      <span className="num">{storyboardCount}</span> 个分镜
                     </p>
-                  )}
+                    {hasPlan && (
+                      <p className="mt-auto pt-2 text-xs font-medium text-success">
+                        已选用 <span className="num">{selectedCount}</span> 个素材
+                      </p>
+                    )}
+                  </div>
                 </button>
               );
             })}
@@ -170,77 +203,82 @@ export default function Materials() {
   // --- 详情视图 ---
   return (
     <div>
+      {pageHeader}
+
       {/* 顶部导航 */}
-      <div className="flex items-center gap-3 mb-6">
-        <button
+      <div className="mb-4 flex items-center">
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={() => {
             setSelectedTopicId(null);
             setSelectedScriptId('');
           }}
-          className="text-text-secondary hover:text-text text-sm flex items-center gap-1"
         >
-          ← 返回列表
-        </button>
+          <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
+          返回列表
+        </Button>
       </div>
 
+      <SectionHeading title="分析素材需求" hint="按分镜逐条给出 BGM / 音效 / 表情包 / 动画建议" />
+
       {/* 选题标题 + 脚本选择 */}
-      <div className="bg-surface border border-border rounded-xl p-5 mb-5">
-        <div className="flex items-start justify-between gap-4 mb-4">
-          <div>
-            <div className="flex items-center gap-2 mb-2">
-              <span className={`text-xs px-2 py-0.5 rounded-full border ${categoryBadge(selectedTopic.category)}`}>
-                {categoryEmoji(selectedTopic.category)} {categoryLabel(selectedTopic.category)}
-              </span>
-            </div>
-            <h2 className="text-xl font-bold">{selectedTopic.title}</h2>
+      <Card padding="lg" className="mb-5">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${categoryBadge(selectedTopic.category)}`}>
+              {categoryEmoji(selectedTopic.category)} {categoryLabel(selectedTopic.category)}
+            </span>
+            <h2 className="mt-2 text-lg font-semibold tracking-tight text-text">{selectedTopic.title}</h2>
           </div>
-          <button
+          <Button
             onClick={handleAnalyze}
-            disabled={analyzing || !selectedScript}
-            className="px-5 py-2.5 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary-dark transition-colors disabled:opacity-50 whitespace-nowrap"
+            disabled={!selectedScript}
+            loading={analyzing}
+            className="shrink-0"
           >
+            <Sparkles className="h-4 w-4" aria-hidden="true" />
             {analyzing ? 'AI 分析中...' : selectedTopic.materialPlan ? '重新分析素材' : 'AI 分析素材需求'}
-          </button>
+          </Button>
         </div>
 
         {/* 脚本选择器 */}
         {selectedTopicScripts.length > 0 && (
-          <div className="flex items-center gap-3">
-            <span className="text-sm text-text-secondary">选择脚本：</span>
-            <select
-              value={selectedScriptId}
-              onChange={(e) => setSelectedScriptId(e.target.value)}
-              className="text-sm border border-border rounded-lg px-3 py-1.5 bg-surface"
-            >
-              {selectedTopicScripts.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.platform === 'bilibili' ? 'B站' : '抖音'} - {s.version === 'long' ? '长版' : '短版'}
-                  {s.title ? ` · ${s.title}` : ''}
-                </option>
-              ))}
-            </select>
+          <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-border pt-4">
+            <Field label="选择脚本" htmlFor="materials-script" className="w-full min-w-0 sm:w-72">
+              <Select
+                id="materials-script"
+                value={selectedScriptId}
+                onChange={(e) => setSelectedScriptId(e.target.value)}
+              >
+                {selectedTopicScripts.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.platform === 'bilibili' ? 'B站' : '抖音'} - {s.version === 'long' ? '长版' : '短版'}
+                    {s.title ? ` · ${s.title}` : ''}
+                  </option>
+                ))}
+              </Select>
+            </Field>
             {selectedScript && (
-              <span className="text-xs text-text-secondary">
-                {selectedScript.storyboards.length} 个分镜
+              <span className="text-xs text-text-muted">
+                <span className="num">{selectedScript.storyboards.length}</span> 个分镜
               </span>
             )}
           </div>
         )}
-      </div>
+      </Card>
 
       {/* 错误提示 */}
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-4 mb-5 text-sm">
-          {error}
+        <div className="mb-5 flex items-start gap-2 rounded-xl border border-danger/30 bg-danger-soft px-3.5 py-3 text-xs text-danger">
+          <TriangleAlert className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          <span className="min-w-0 flex-1 leading-relaxed">{error}</span>
         </div>
       )}
 
       {/* 分析中提示 */}
       {analyzing && (
-        <div className="text-center py-16">
-          <div className="inline-block animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent mb-4"></div>
-          <p className="text-text-secondary">AI 正在分析每个分镜的素材需求，可能需要 10-20 秒...</p>
-        </div>
+        <LoadingBlock label="AI 正在分析每个分镜的素材需求，可能需要 10-20 秒..." />
       )}
 
       {/* 素材方案展示 */}
@@ -254,10 +292,17 @@ export default function Materials() {
 
       {/* 空状态 */}
       {!analyzing && !selectedTopic.materialPlan && !error && (
-        <div className="text-center py-20 text-text-secondary">
-          <p className="text-lg mb-2">还没有素材方案</p>
-          <p className="text-sm">点击右上角"AI 分析素材需求"开始</p>
-        </div>
+        <EmptyState
+          icon={<Wand2 className="h-5 w-5" />}
+          title="还没有素材方案"
+          description="点击右上角「AI 分析素材需求」开始"
+          action={
+            <Button onClick={handleAnalyze} disabled={!selectedScript}>
+              <Sparkles className="h-4 w-4" aria-hidden="true" />
+              AI 分析素材需求
+            </Button>
+          }
+        />
       )}
     </div>
   );
@@ -278,19 +323,18 @@ function MaterialPlanView({
 
   return (
     <div>
-      {/* 统计栏 */}
-      <div className="flex items-center gap-4 mb-5 text-sm">
-        <span className="text-text-secondary">
-          分析于 {new Date(plan.analyzedAt).toLocaleString('zh-CN')}
-        </span>
-        <span className="text-text-secondary">|</span>
-        <span className="font-medium text-green-600">
-          已选用 {getSelectedCountInPlan(plan)} 个素材
-        </span>
-      </div>
+      <SectionHeading
+        title="素材方案"
+        hint={`分析于 ${new Date(plan.analyzedAt).toLocaleString('zh-CN')}`}
+        action={
+          <Badge variant="success" size="lg">
+            已选用 <span className="num">{getSelectedCountInPlan(plan)}</span> 个素材
+          </Badge>
+        }
+      />
 
       {/* 场景列表 */}
-      <div className="space-y-5">
+      <div className="stagger-children space-y-5">
         {plan.scenes.map((scene) => {
           const storyboard = storyboards.find((sb) => sb.sceneNumber === scene.sceneNumber);
           return (
@@ -328,23 +372,23 @@ function SceneCard({
   onToggle: (sceneNumber: number, materialType: MaterialType, recIndex: number) => void;
 }) {
   return (
-    <div className="bg-surface border border-border rounded-xl overflow-hidden">
+    <div className="card overflow-hidden">
       {/* 场景标题 */}
-      <div className="bg-gray-50 border-b border-border px-5 py-3">
+      <div className="border-b border-border bg-surface-muted px-4 py-3">
         <div className="flex items-center gap-3">
-          <span className="flex items-center justify-center w-7 h-7 rounded-full bg-primary text-white text-sm font-bold">
+          <span className="num flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-gradient text-xs font-semibold text-white">
             {scene.sceneNumber}
           </span>
-          <div className="flex-1">
+          <div className="flex-1 min-w-0">
             <p className="text-sm font-medium text-text line-clamp-1">{scene.sceneDescription}</p>
             {scene.dialogue && (
               <p className="text-xs text-text-secondary line-clamp-1 mt-0.5">💬 {scene.dialogue}</p>
             )}
           </div>
           {duration && (
-            <span className="text-xs text-text-secondary bg-gray-100 px-2 py-0.5 rounded">
+            <Badge variant="neutral" size="sm" className="num shrink-0">
               {duration}s
-            </span>
+            </Badge>
           )}
         </div>
       </div>
@@ -355,10 +399,10 @@ function SceneCard({
           const category = scene[type];
           if (!category.needed) {
             return (
-              <div key={type} className="px-5 py-3 flex items-center gap-3 text-text-secondary text-sm">
-                <span className="text-lg opacity-40">{MATERIAL_META[type].icon}</span>
-                <span className="opacity-60">{MATERIAL_META[type].label}</span>
-                <span className="text-xs">— 不需要</span>
+              <div key={type} className="flex items-center gap-2.5 px-4 py-3 text-xs text-text-muted">
+                <span className="text-base opacity-40" aria-hidden="true">{MATERIAL_META[type].icon}</span>
+                <span>{MATERIAL_META[type].label}</span>
+                <span>— 不需要</span>
               </div>
             );
           }
@@ -391,23 +435,23 @@ function MaterialCategorySection({
 }) {
   const meta = MATERIAL_META[type];
   return (
-    <div className="px-5 py-4">
+    <div className="px-4 py-4">
       {/* 类型标题 */}
-      <div className="flex items-center gap-2 mb-3">
-        <span className="text-lg">{meta.icon}</span>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <span className="text-base" aria-hidden="true">{meta.icon}</span>
         <span className={`text-sm font-medium ${meta.text}`}>{meta.label}</span>
         {category.mood && (
-          <span className={`text-xs ${meta.bg} ${meta.text} px-2 py-0.5 rounded-full`}>
+          <Badge variant="neutral" size="sm" className={`${meta.bg} ${meta.text} border-transparent`}>
             {category.mood}
-          </span>
+          </Badge>
         )}
         {category.keywords && (
-          <span className="text-xs text-text-secondary">搜索: {category.keywords}</span>
+          <span className="text-xs text-text-muted">搜索：{category.keywords}</span>
         )}
       </div>
 
       {/* 推荐素材列表 */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         {category.recommendations
           .map((rec, originalIndex) => ({ rec, originalIndex }))
           .sort((a, b) => (b.rec.isOfficial ? 1 : 0) - (a.rec.isOfficial ? 1 : 0))
@@ -442,58 +486,59 @@ function RecommendationCard({
 
   return (
     <div
-      className={`border rounded-lg p-3 transition-all ${
+      className={`rounded-xl border p-3.5 transition-colors ${
         selected
           ? `${meta.border} ${meta.bg} ring-1 ring-current`
           : isOfficial
-            ? 'border-amber-300 bg-amber-50/50 hover:border-amber-400'
-            : 'border-border bg-surface hover:border-gray-300'
+            ? 'border-warning/30 bg-warning-soft/50 hover:border-warning'
+            : 'border-border bg-surface hover:border-border-strong'
       }`}
     >
-      <div className="flex items-start justify-between gap-2 mb-2">
-        <div className="flex items-center gap-2 flex-1 min-w-0">
+      <div className="mb-2 flex items-start justify-between gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
           {isOfficial && (
-            <span className="text-xs px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-300 font-medium whitespace-nowrap flex-shrink-0">
+            <Badge variant="warning" size="sm" className="shrink-0">
               官方动画
-            </span>
+            </Badge>
           )}
-          <h4 className={`text-sm font-medium ${selected ? meta.text : isOfficial ? 'text-amber-800' : 'text-text'}`}>
+          <h4 className={`truncate text-sm font-medium tracking-tight ${selected ? meta.text : isOfficial ? 'text-warning' : 'text-text'}`}>
             {rec.title}
           </h4>
         </div>
-        <button
+        <Button
+          variant={selected ? 'soft' : 'secondary'}
+          size="xs"
+          aria-pressed={selected}
           onClick={onToggle}
-          className={`text-xs px-2 py-1 rounded-full border transition-colors whitespace-nowrap flex-shrink-0 ${
-            selected
-              ? `${meta.bg} ${meta.text} ${meta.border}`
-              : 'bg-gray-50 text-text-secondary border-gray-200 hover:bg-gray-100'
+          className={`shrink-0 rounded-full ${
+            selected ? `border ${meta.border} ${meta.bg} ${meta.text}` : ''
           }`}
         >
           {selected ? '✓ 已选用' : '选用'}
-        </button>
+        </Button>
       </div>
 
       {/* 动画出处信息 */}
       {isOfficial && animeSrc && (
-        <div className="flex items-center gap-2 mb-2 text-xs bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5">
-          <span className="text-amber-600">🎬</span>
-          <span className="text-amber-800 font-medium">{animeSrc.series}</span>
-          <span className="text-amber-600">·</span>
-          <span className="text-amber-700">{animeSrc.episode}</span>
+        <div className="mb-2 flex flex-wrap items-center gap-1.5 rounded-lg border border-warning/30 bg-warning-soft px-2.5 py-1.5 text-xs leading-relaxed">
+          <span className="text-warning" aria-hidden="true">🎬</span>
+          <span className="font-medium text-warning">{animeSrc.series}</span>
+          <span className="text-warning">·</span>
+          <span className="text-warning">{animeSrc.episode}</span>
           {animeSrc.timestamp && (
             <>
-              <span className="text-amber-600">·</span>
-              <span className="text-amber-700">{animeSrc.timestamp}</span>
+              <span className="text-warning">·</span>
+              <span className="num text-warning">{animeSrc.timestamp}</span>
             </>
           )}
         </div>
       )}
 
       {rec.description && (
-        <p className="text-xs text-text-secondary mb-1.5">{rec.description}</p>
+        <p className="mb-1.5 text-xs leading-relaxed text-text-secondary">{rec.description}</p>
       )}
       {rec.reason && (
-        <p className="text-xs text-text-secondary italic mb-2">💡 {rec.reason}</p>
+        <p className="mb-2 text-xs italic leading-relaxed text-text-secondary">💡 {rec.reason}</p>
       )}
 
       {/* 搜索链接 */}
@@ -504,10 +549,10 @@ function RecommendationCard({
             href={link.url}
             target="_blank"
             rel="noopener noreferrer"
-            className={`text-xs px-2 py-1 rounded border transition-colors ${
+            className={`rounded-md border px-2 py-1 text-xs transition-colors ${
               isOfficial
-                ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100 hover:border-amber-300'
-                : 'bg-gray-50 text-blue-600 border-gray-200 hover:bg-blue-50 hover:border-blue-200'
+                ? 'border-warning/30 bg-warning-soft text-warning hover:border-warning'
+                : 'border-border bg-surface text-text hover:border-primary/40 hover:text-primary'
             }`}
           >
             🔗 {link.platform}

@@ -1,6 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { ArrowRight, Check, LoaderCircle, Sparkles, TriangleAlert } from 'lucide-react';
 import { api } from '../api/client';
-import type { Platform, PlatformCheck, PlatformCheckInput, RuleStatus, EvidenceLevel, CoverPolishResult } from '../types';
+import { Badge } from './ui/Badge';
+import { Button } from './ui/Button';
+import { Card } from './ui/Card';
+import { Field, Input } from './ui/Input';
+import { SourceNote } from './ui/SourceNote';
+import { cn } from '../utils/cn';
+import type { Platform, PlatformCheck, PlatformCheckInput, RuleStatus, CoverPolishResult } from '../types';
 
 /**
  * M4 · 平台适配检查面板
@@ -13,43 +20,40 @@ import type { Platform, PlatformCheck, PlatformCheckInput, RuleStatus, EvidenceL
  *  - v1.5.2 精简：只保留「写脚本时就能判断」的检查。没填的输入（标题 / 封面文案）对应的规则
  *    直接不出现，不再排一行「不填就不会给结论」的占位；发布后才知道的指标（CTR / 完播率 /
  *    更新频率）已整体删除 —— 这类数字该去看板看，不适合混在脚本期判断里。
+ *  - v1.6.0 内部工作面重做：外壳换 Card、平台切换换分段控件、输入换 Field/Input、
+ *    每条规则一张小卡、出处抽成 SourceNote，正文最小字号从 10/11px 提到 12px。
  */
 
-const STATUS_STYLE: Record<RuleStatus, { label: string; cls: string }> = {
-  pass: { label: '通过', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
-  warn: { label: '注意', cls: 'bg-amber-50 text-amber-700 border-amber-200' },
-  fail: { label: '不建议', cls: 'bg-red-50 text-red-700 border-red-200' },
-  info: { label: '参考', cls: 'bg-slate-100 text-slate-600 border-slate-200' },
+const PLATFORM_LABEL: Record<Platform, string> = {
+  bilibili: 'B站',
+  douyin: '抖音',
 };
 
-const LEVEL_STYLE: Record<EvidenceLevel, string> = {
-  A: 'bg-blue-600 text-white',
-  B: 'bg-blue-100 text-blue-700',
-  C: 'bg-slate-200 text-slate-600',
-};
-
-const LEVEL_TITLE: Record<EvidenceLevel, string> = {
-  A: 'A 级证据：平台官方口径或同行评审论文',
-  B: 'B 级证据：第三方大样本数据',
-  C: 'C 级证据：经验帖或本工具自定义，不能当 KPI',
+const STATUS_META: Record<
+  RuleStatus,
+  { label: string; variant: 'success' | 'warning' | 'danger' | 'neutral' }
+> = {
+  pass: { label: '通过', variant: 'success' },
+  warn: { label: '注意', variant: 'warning' },
+  fail: { label: '不建议', variant: 'danger' },
+  info: { label: '参考', variant: 'neutral' },
 };
 
 function StatusBadge({ status }: { status: RuleStatus }) {
-  const s = STATUS_STYLE[status];
-  return <span className={`px-1.5 py-0.5 text-[10px] font-medium rounded border ${s.cls}`}>{s.label}</span>;
+  const s = STATUS_META[status];
+  return (
+    <Badge variant={s.variant} size="md">
+      {s.label}
+    </Badge>
+  );
 }
 
-function EvidenceLine({ evidence }: { evidence: { source: string; level: EvidenceLevel; note?: string } }) {
+/** 建议行：紫色箭头 + 一句话，替代改造前裸 `text-xs text-primary` */
+function SuggestionLine({ children }: { children: ReactNode }) {
   return (
-    <p className="mt-1 text-[11px] text-text-secondary leading-relaxed">
-      <span
-        title={LEVEL_TITLE[evidence.level]}
-        className={`inline-block mr-1 px-1 rounded text-[10px] font-bold align-middle ${LEVEL_STYLE[evidence.level]}`}
-      >
-        {evidence.level}
-      </span>
-      出处：{evidence.source}
-      {evidence.note ? `（${evidence.note}）` : ''}
+    <p className="mt-1.5 flex items-start gap-1.5 text-xs font-medium leading-relaxed text-primary">
+      <ArrowRight className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+      <span className="min-w-0">{children}</span>
     </p>
   );
 }
@@ -194,156 +198,253 @@ export default function PlatformCheckPanel({ platform, title, durationSec, saved
   };
 
   return (
-    <div className="bg-surface border border-border rounded-xl p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
-        <h3 className="text-sm font-bold text-text">
-          平台适配检查
-          <span className="ml-2 px-1.5 py-0.5 text-[10px] font-normal rounded bg-slate-100 text-slate-600 border border-slate-200">
-            纯规则引擎 {current ? current.engine : 'pure-rules-v1'}
-          </span>
-        </h3>
-        <div className="flex items-center gap-1">
+    <Card padding="lg">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-sm font-semibold text-text">平台适配检查</h3>
+            <Badge variant="neutral" size="sm">
+              纯规则引擎 {current ? current.engine : 'pure-rules-v1'}
+            </Badge>
+            {loading && (
+              <span className="inline-flex items-center gap-1 text-xs text-text-muted">
+                <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                复查中
+              </span>
+            )}
+          </div>
+          <p className="mt-1 text-xs leading-relaxed text-text-secondary">
+            同一份脚本，两个平台的结论不一样 —— 在这里切换对比。输入就自动复查。
+          </p>
+        </div>
+
+        {/* 平台切换：分段控件（改造前是两个描边按钮） */}
+        <div
+          className="flex shrink-0 items-center gap-0.5 rounded-lg border border-border bg-surface-muted p-0.5"
+          role="group"
+          aria-label="选择要查看的平台"
+        >
           {(['bilibili', 'douyin'] as Platform[]).map((p) => (
             <button
               key={p}
+              type="button"
               onClick={() => setActive(p)}
-              className={`px-2.5 py-1 text-xs rounded-lg border transition-colors ${
+              aria-pressed={active === p}
+              className={cn(
+                'rounded-md px-3 py-1 text-xs font-medium transition-colors',
                 active === p
-                  ? 'bg-primary text-white border-primary'
-                  : 'bg-surface text-text-secondary border-border hover:text-text'
-              }`}
+                  ? 'bg-surface text-text shadow-xs'
+                  : 'text-text-secondary hover:text-text'
+              )}
             >
-              {p === 'bilibili' ? 'B站' : '抖音'}
+              {PLATFORM_LABEL[p]}
             </button>
           ))}
         </div>
       </div>
-      <p className="text-[11px] text-text-secondary mb-3">
-        同一份脚本，两个平台的结论不一样 —— 在这里切换对比。输入就自动复查{loading ? '，正在复查…' : ''}
-      </p>
 
-      <label className="block mb-2">
-        <span className="text-xs font-medium text-text">封面文案（封面上要写的那几个字）</span>
-        <input
-          type="text"
-          value={coverText}
-          onChange={(e) => {
-            setCoverText(e.target.value);
-            persist({ coverText: e.target.value });
-          }}
-          placeholder="不填就不会给封面相关的结论"
-          className="w-full mt-1 px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
-        />
-      </label>
-
-      <div className="flex flex-wrap items-center gap-2 mb-3">
-        <button
-          onClick={handleDone}
-          className="px-3 py-1.5 text-xs font-medium rounded-lg bg-primary text-white hover:opacity-90 transition-opacity"
-        >
-          填写完毕
-        </button>
-        <span className="text-[11px] text-text-secondary">
-          自动保存：填了就存进这条脚本，关掉页面重开也还在
-          {savedAt ? ` · 上次填写 ${fmtTime(savedAt)}` : ''}
-          {doneAt ? (loading ? ' · 已保存，正在复查…' : ` · 已保存并复查（${fmtTime(doneAt)}）`) : ''}
-        </span>
+      <div className="mt-4">
+        <Field label="封面文案" hint="封面上要写的那几个字，填了就自动保存在本机">
+          <Input
+            type="text"
+            value={coverText}
+            onChange={(e) => {
+              setCoverText(e.target.value);
+              persist({ coverText: e.target.value });
+            }}
+            placeholder="不填就不会给封面相关的结论"
+          />
+        </Field>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <Button onClick={handleDone} variant="secondary" size="sm">
+            <Check className="h-3.5 w-3.5" aria-hidden="true" />
+            填写完毕
+          </Button>
+          <span className="text-xs text-text-muted">
+            自动保存：填了就存进这条脚本，关掉页面重开也还在
+            {savedAt ? ` · 上次填写 ${fmtTime(savedAt)}` : ''}
+            {doneAt ? (loading ? ' · 已保存，正在复查…' : ` · 已保存并复查（${fmtTime(doneAt)}）`) : ''}
+          </span>
+        </div>
       </div>
 
-      {error && <p className="text-xs text-danger mb-3">检查失败：{error}</p>}
+      {error && (
+        <div className="mt-3 flex items-start gap-2 rounded-lg border border-danger/30 bg-danger-soft px-3 py-2">
+          <TriangleAlert className="mt-px h-3.5 w-3.5 shrink-0 text-danger" aria-hidden="true" />
+          <p className="min-w-0 flex-1 text-xs leading-relaxed text-danger">检查失败：{error}</p>
+        </div>
+      )}
 
       {current && (
         <>
-          <div className="bg-background border border-border rounded-lg p-3 mb-3">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-xs font-bold text-text">{current.platformLabel} · 建议时长 {current.durationAdvice.target}</span>
+          {/* 时长结论 */}
+          <div className="mt-4 rounded-xl border border-border bg-surface-muted/50 p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-semibold text-text">{current.platformLabel}</span>
+              <span className="text-xs text-text-muted">建议时长</span>
+              <span className="num text-sm font-semibold text-text">{current.durationAdvice.target}</span>
               <StatusBadge status={current.durationAdvice.status} />
             </div>
-            <p className="text-xs text-text leading-relaxed">{current.durationAdvice.detail}</p>
-            {current.durationAdvice.hint && (
-              <p className="mt-1 text-xs text-primary">→ {current.durationAdvice.hint}</p>
-            )}
-            {current.durationAdvice.completionReference && (
-              <p className="mt-1 text-[11px] text-text-secondary">
-                完播率参考线：{current.durationAdvice.completionReference.text}
-              </p>
-            )}
-            <EvidenceLine evidence={current.durationAdvice.evidence} />
-          </div>
-
-          <div className="space-y-2">
-            {current.rules.map((rule) => (
-              <div key={rule.id} className="border-t border-border pt-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-medium text-text">{rule.label}</span>
-                  <StatusBadge status={rule.status} />
-                </div>
-                <p className="text-xs text-text-secondary leading-relaxed mt-0.5">{rule.detail}</p>
-                {rule.hint && <p className="mt-0.5 text-xs text-primary">→ {rule.hint}</p>}
-                <EvidenceLine evidence={rule.evidence} />
-              </div>
-            ))}
-          </div>
-
-          <div className="mt-3 pt-2 border-t border-border">
-            <p className="text-[11px] text-text-secondary">
-              {current.summary.total > 0 ? (
-                <>
-                  规则：{current.summary.total} 条，全部带出处（{current.summary.sourced}/{current.summary.total}）；
-                  通过 {current.summary.pass} · 注意 {current.summary.warn} · 不建议 {current.summary.fail} · 参考 {current.summary.info}
-                </>
-              ) : (
-                '这里没有需要改的地方：填上视频标题或封面文案才会出现对应检查。'
-              )}
+            <p className="mt-2 text-xs leading-relaxed text-text-secondary sm:text-sm">
+              {current.durationAdvice.detail}
             </p>
+            {current.durationAdvice.hint && <SuggestionLine>{current.durationAdvice.hint}</SuggestionLine>}
+            {current.durationAdvice.completionReference && (
+              <p className="mt-1.5 text-xs text-text-secondary">
+                完播率参考线：
+                <span className="num text-text">{current.durationAdvice.completionReference.text}</span>
+              </p>
+            )}
+            <SourceNote
+              tier={current.durationAdvice.evidence.level}
+              note={current.durationAdvice.evidence.note}
+            >
+              {current.durationAdvice.evidence.source}
+            </SourceNote>
           </div>
 
+          {/* 规则条目：一条一张小卡 */}
+          {current.rules.length > 0 && (
+            <div className="mt-3 space-y-2.5">
+              {current.rules.map((rule, i) => (
+                <div key={rule.id} className="rounded-xl border border-border bg-surface p-3.5">
+                  <div className="flex items-center gap-2">
+                    <span className="num inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-surface-muted text-xs font-semibold text-text-secondary">
+                      {i + 1}
+                    </span>
+                    <span className="min-w-0 flex-1 text-sm font-medium text-text">{rule.label}</span>
+                    <StatusBadge status={rule.status} />
+                  </div>
+                  <p className="mt-2 text-xs leading-relaxed text-text-secondary">{rule.detail}</p>
+                  {rule.hint && <SuggestionLine>{rule.hint}</SuggestionLine>}
+                  <SourceNote tier={rule.evidence.level} note={rule.evidence.note}>
+                    {rule.evidence.source}
+                  </SourceNote>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* 汇总 */}
+          <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1.5 text-xs text-text-secondary">
+            {current.summary.total > 0 ? (
+              <>
+                <span>
+                  规则：{current.summary.total} 条，全部带出处（{current.summary.sourced}/
+                  {current.summary.total}）
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <Badge variant="success" size="sm">
+                    通过 {current.summary.pass}
+                  </Badge>
+                  <Badge variant="warning" size="sm">
+                    注意 {current.summary.warn}
+                  </Badge>
+                  <Badge variant="danger" size="sm">
+                    不建议 {current.summary.fail}
+                  </Badge>
+                  <Badge variant="neutral" size="sm">
+                    参考 {current.summary.info}
+                  </Badge>
+                </span>
+              </>
+            ) : (
+              <span>这里没有需要改的地方：填上视频标题或封面文案才会出现对应检查。</span>
+            )}
+          </div>
+
+          {/* 另一平台的结论（同一份脚本对比） */}
           {otherCheck && (
-            <div className="mt-3 bg-background border border-border rounded-lg p-3">
-              <p className="text-[11px] font-medium text-text mb-1">
-                同一份脚本在 {otherCheck.platformLabel} 的结论（建议时长 {otherCheck.durationAdvice.target}）
+            <div className="mt-3 rounded-xl border border-border bg-surface-muted/40 p-3.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-semibold text-text">
+                  同一份脚本在 {otherCheck.platformLabel}
+                </span>
+                <Badge variant="outline" size="sm">
+                  建议时长 {otherCheck.durationAdvice.target}
+                </Badge>
+              </div>
+              <p className="mt-1.5 text-xs leading-relaxed text-text-secondary">
+                {otherCheck.durationAdvice.detail}
               </p>
-              <p className="text-xs text-text-secondary leading-relaxed">{otherCheck.durationAdvice.detail}</p>
               {otherCheck.durationAdvice.hint && (
-                <p className="mt-1 text-xs text-primary">→ {otherCheck.durationAdvice.hint}</p>
+                <SuggestionLine>{otherCheck.durationAdvice.hint}</SuggestionLine>
               )}
             </div>
           )}
 
-          <div className="mt-3 pt-2 border-t border-border">
+          {/* AI 润色：与规则结论严格分开 */}
+          <div className="mt-3 border-t border-border pt-3">
             <div className="flex flex-wrap items-center gap-2">
-              <button
-                onClick={handleAiPolish}
-                disabled={aiLoading}
-                className="px-3 py-1 text-xs font-medium border border-border rounded-lg hover:bg-background transition-colors disabled:opacity-50"
-              >
-                {aiLoading ? 'AI 正在写…' : '用 AI 润色封面文案（消耗一次 AI 配额）'}
-              </button>
-              <span className="text-[11px] text-text-secondary">判断由规则引擎给出，AI 只写文案</span>
+              <Button onClick={handleAiPolish} loading={aiLoading} variant="secondary" size="sm">
+                <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                用 AI 润色封面文案
+              </Button>
+              <span className="text-xs text-text-muted">
+                消耗一次 AI 配额；判断由规则引擎给出，AI 只写文案
+              </span>
             </div>
             {aiError && <p className="mt-2 text-xs text-danger">{aiError}</p>}
             {ai && (
-              <div className="mt-2 bg-background border border-border rounded-lg p-3">
-                <p className="text-[11px] font-medium text-text mb-1">
-                  AI 生成（来源：ai，不是平台口径，可以不用）
+              <div className="mt-2.5 rounded-xl border border-primary/25 bg-primary-soft/50 p-3.5">
+                <p className="flex items-center gap-1.5 text-xs font-semibold text-primary-contrast">
+                  <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                  AI 生成（来源 ai，不是平台口径，可以不用）
                 </p>
                 {ai.coverCandidates.length > 0 && (
-                  <p className="text-xs text-text">封面候选：{ai.coverCandidates.join(' / ')}</p>
+                  <div className="mt-2">
+                    <p className="text-xs text-text-muted">封面候选</p>
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      {ai.coverCandidates.map((c) => (
+                        <span
+                          key={c}
+                          className="rounded-md border border-border bg-surface px-2 py-1 text-xs text-text"
+                        >
+                          {c}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
                 )}
                 {ai.titleCandidates.length > 0 && (
-                  <p className="text-xs text-text mt-1">标题候选：{ai.titleCandidates.join(' / ')}</p>
+                  <div className="mt-2">
+                    <p className="text-xs text-text-muted">标题候选</p>
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      {ai.titleCandidates.map((t) => (
+                        <span
+                          key={t}
+                          className="rounded-md border border-border bg-surface px-2 py-1 text-xs text-text"
+                        >
+                          {t}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
                 )}
-                {ai.rationale && <p className="text-[11px] text-text-secondary mt-1">取舍说明：{ai.rationale}</p>}
-                <p className="text-[10px] text-text-secondary mt-1">模型：{ai.model}</p>
+                {ai.rationale && (
+                  <p className="mt-2 text-xs leading-relaxed text-text-secondary">
+                    取舍说明：{ai.rationale}
+                  </p>
+                )}
+                <p className="mt-1.5 text-xs text-text-muted">
+                  模型 <span className="num">{ai.model}</span>
+                </p>
               </div>
             )}
           </div>
 
-          <p className="mt-3 text-[11px] text-text-secondary leading-relaxed">{current.disclaimer}</p>
+          <p className="mt-3 border-l-2 border-border-strong pl-3 text-xs leading-relaxed text-text-muted">
+            {current.disclaimer}
+          </p>
         </>
       )}
 
-      {!current && !error && <p className="text-xs text-text-secondary">正在检查…</p>}
-    </div>
+      {!current && !error && (
+        <div className="mt-4 flex items-center gap-2 rounded-xl border border-dashed border-border px-3.5 py-3 text-xs text-text-secondary">
+          <LoaderCircle className="h-3.5 w-3.5 animate-spin text-primary" aria-hidden="true" />
+          正在检查…
+        </div>
+      )}
+    </Card>
   );
 }

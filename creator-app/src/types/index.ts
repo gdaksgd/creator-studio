@@ -133,10 +133,11 @@ export interface ReportKeyword {
 
 export interface ReportTitlePattern {
   basis: ReportBasis;
-  questionRatio: ReportMetric;
-  lengthP25: ReportMetric;
-  lengthMedian: ReportMetric;
-  lengthP75: ReportMetric;
+  /** 样本不足时这四项为 null（不是 0）——样本不够就不给数字 */
+  questionRatio: ReportMetric | null;
+  lengthP25: ReportMetric | null;
+  lengthMedian: ReportMetric | null;
+  lengthP75: ReportMetric | null;
   lengthBuckets: Array<{ label: string; count: number; ratio: number }>;
   keywords: ReportKeyword[];
   caveat: string;

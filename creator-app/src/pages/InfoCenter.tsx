@@ -2,6 +2,13 @@ import { useEffect, useState, useCallback } from 'react';
 import { api, type NewsItem } from '../api/client';
 import { useTopicStore } from '../store/topicStore';
 import { NEWS_CATEGORIES, categoryLabel, isCreativeCategory, DEFAULT_CATEGORY } from '../config/categories';
+import { Badge } from '../components/ui/Badge';
+import { Button } from '../components/ui/Button';
+import { EmptyState } from '../components/ui/EmptyState';
+import { PageHeader } from '../components/ui/PageHeader';
+import { LoadingBlock } from '../components/ui/Spinner';
+import { Stat } from '../components/ui/Stat';
+import { BookmarkPlus, Check, Flame, Languages, Newspaper, Radar, Radio } from 'lucide-react';
 
 const SOURCE_LABELS: Record<string, string> = {
   rss: 'RSS',
@@ -10,11 +17,20 @@ const SOURCE_LABELS: Record<string, string> = {
   steam: 'Steam',
 };
 
-const SOURCE_COLORS: Record<string, string> = {
-  rss: 'bg-gray-100 text-gray-700',
-  youtube: 'bg-red-50 text-red-700',
-  bilibili: 'bg-pink-50 text-pink-700',
-  steam: 'bg-blue-50 text-blue-700',
+/** 来源徽标配色：走 Badge 的语义变体，避免每处再写一套色值 */
+const SOURCE_VARIANT: Record<string, 'neutral' | 'danger' | 'primary' | 'info'> = {
+  rss: 'neutral',
+  youtube: 'danger',
+  bilibili: 'primary',
+  steam: 'info',
+};
+
+/** 列表行左侧 2px 竖条：用来源色区分渠道，比再加一个图标更克制 */
+const SOURCE_BAR: Record<string, string> = {
+  rss: 'bg-text-muted/40',
+  youtube: 'bg-danger',
+  bilibili: 'bg-primary',
+  steam: 'bg-info',
 };
 
 function formatViews(views?: number): string {
@@ -34,6 +50,9 @@ function timeAgo(ts: number): string {
   return `${mins}分钟前`;
 }
 
+/** 首屏只铺这么多条：库里最多 500 条，一次全渲染会让首屏很重、滚动条长得没边 */
+const PAGE_SIZE = 24;
+
 export default function InfoCenter() {
   const { addTopic } = useTopicStore();
   const [news, setNews] = useState<NewsItem[]>([]);
@@ -43,6 +62,7 @@ export default function InfoCenter() {
   const [lastCollected, setLastCollected] = useState<number | null>(null);
   const [filter, setFilter] = useState<string>('all');
   const [sourceFilter, setSourceFilter] = useState<'all' | 'youtube' | 'bilibili' | 'rss'>('all');
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
   const loadNews = useCallback(async () => {
     setLoading(true);
@@ -54,6 +74,7 @@ export default function InfoCenter() {
         limit: 500,
       });
       setNews(data.news);
+      setVisibleCount(PAGE_SIZE);
       setLastCollected(data.lastCollected);
     } catch (err) {
       console.error('Failed to load news:', err);
@@ -111,129 +132,213 @@ export default function InfoCenter() {
     alert('已保存为选题！');
   };
 
+  // ── 顶部指标：全部由已加载的 news 现算，不额外发请求、不编造数据 ──
+  const DAY_MS = 86400000;
+  const nowMs = Date.now();
+  const todayCount = news.filter((n) => nowMs - n.publishedAt < DAY_MS).length;
+  const platformCount = new Set(news.map((n) => n.sourceType)).size;
+  const savedCount = news.filter((n) => n.savedAsTopic).length;
+  const visibleNews = news.slice(0, visibleCount);
+
   return (
     <div>
-      <div className="flex items-center justify-between mb-5">
-        <div>
-          <h1 className="text-2xl font-bold text-text">资讯中心</h1>
-          <p className="text-text-secondary text-sm mt-1">
-            自动收集各品类游戏资讯和热门视频
-            {lastCollected && ` | 上次更新: ${timeAgo(lastCollected)}`}
-          </p>
-        </div>
-        <button
-          onClick={handleCollect}
-          disabled={collecting}
-          className="bg-primary text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary-dark transition-colors disabled:opacity-50"
-        >
-          {collecting ? '收集中...' : '立即收集'}
-        </button>
-        <button
-          onClick={handleRetranslate}
-          disabled={retranslating}
-          className="bg-surface border border-border text-text-secondary px-4 py-2 rounded-lg text-sm font-medium hover:text-text transition-colors disabled:opacity-50"
-        >
-          {retranslating ? '翻译中...' : '重新翻译'}
-        </button>
+      <PageHeader
+        eyebrow="数据 / NEWS"
+        title="资讯中心"
+        description={`自动收集各品类游戏资讯和热门视频${
+          lastCollected ? ` | 上次更新: ${timeAgo(lastCollected)}` : ''
+        }`}
+        actions={
+          <>
+            <Button onClick={handleCollect} loading={collecting}>
+              <Radar className="h-4 w-4" aria-hidden="true" />
+              {collecting ? '收集中...' : '立即收集'}
+            </Button>
+            <Button variant="secondary" onClick={handleRetranslate} loading={retranslating}>
+              <Languages className="h-4 w-4" aria-hidden="true" />
+              {retranslating ? '翻译中...' : '重新翻译'}
+            </Button>
+          </>
+        }
+      />
+
+      {/* 指标条：四个数字全部来自当前已加载的资讯列表 */}
+      <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Stat
+          label="收录资讯"
+          value={news.length}
+          unit="条"
+          icon={Newspaper}
+          hint="当前筛选结果"
+        />
+        <Stat
+          label="今日新增"
+          value={todayCount}
+          unit="条"
+          icon={Flame}
+          tone="warning"
+          hint="按发布时间统计"
+        />
+        <Stat
+          label="覆盖平台"
+          value={platformCount}
+          unit="个"
+          icon={Radio}
+          tone="info"
+          hint="当前结果内的来源数"
+        />
+        <Stat
+          label="已存选题"
+          value={savedCount}
+          unit="条"
+          icon={BookmarkPlus}
+          tone="success"
+          hint="已转成选题的资讯"
+        />
       </div>
 
-      <div className="flex items-center gap-2 mb-4 flex-wrap">
-        {[{ id: 'all', short: '全部', emoji: '' }, ...NEWS_CATEGORIES].map((c) => (
-          <button
-            key={c.id}
-            onClick={() => setFilter(c.id)}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-              filter === c.id ? 'bg-primary text-white' : 'bg-surface border border-border text-text-secondary hover:text-text'
-            }`}
-          >
-            {c.id === 'all' ? '全部' : `${c.emoji} ${c.short}`}
-          </button>
-        ))}
-        <span className="w-px h-5 bg-border mx-1" />
-        {(['all', 'bilibili', 'youtube', 'rss'] as const).map((s) => (
-          <button
-            key={s}
-            onClick={() => setSourceFilter(s)}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-              sourceFilter === s ? 'bg-gray-800 text-white' : 'bg-surface border border-border text-text-secondary hover:text-text'
-            }`}
-          >
-            {s === 'all' ? '全部来源' : SOURCE_LABELS[s]}
-          </button>
-        ))}
-        <span className="text-xs text-text-secondary ml-auto">{news.length} 条</span>
+      <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-border bg-surface/70 p-2.5">
+        <div role="group" aria-label="按品类筛选" className="flex flex-wrap items-center gap-2">
+          {[{ id: 'all', short: '全部', emoji: '' }, ...NEWS_CATEGORIES].map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => setFilter(c.id)}
+              aria-pressed={filter === c.id}
+              className={`rounded-full border px-3.5 py-1.5 text-xs font-medium transition-colors ${
+                filter === c.id
+                  ? 'border-transparent bg-primary text-white shadow-xs'
+                  : 'border-border bg-surface text-text-secondary hover:border-border-strong hover:text-text'
+              }`}
+            >
+              {c.id === 'all' ? '全部' : `${c.emoji} ${c.short}`}
+            </button>
+          ))}
+        </div>
+        <span className="h-4 w-px bg-border" aria-hidden="true" />
+        <div role="group" aria-label="按来源筛选" className="flex flex-wrap items-center gap-2">
+          {(['all', 'bilibili', 'youtube', 'rss'] as const).map((s) => (
+            <button
+              key={s}
+              type="button"
+              onClick={() => setSourceFilter(s)}
+              aria-pressed={sourceFilter === s}
+              className={`rounded-full border px-3.5 py-1.5 text-xs font-medium transition-colors ${
+                sourceFilter === s
+                  ? 'border-transparent bg-text text-bg shadow-xs'
+                  : 'border-border bg-surface text-text-secondary hover:border-border-strong hover:text-text'
+              }`}
+            >
+              {s === 'all' ? '全部来源' : SOURCE_LABELS[s]}
+            </button>
+          ))}
+        </div>
+        <span className="num ml-auto shrink-0 text-xs text-text-muted">
+          {news.length} 条
+        </span>
       </div>
 
       {loading ? (
-        <div className="text-center text-text-secondary py-16">加载中...</div>
+        <LoadingBlock label="正在读取本地资讯…" />
       ) : news.length === 0 ? (
-        <div className="text-center py-16">
-          <div className="text-4xl mb-3">📡</div>
-          <p className="text-text-secondary mb-3">还没有资讯数据</p>
-          <p className="text-xs text-text-secondary mb-4">
-            点击「立即收集」开始抓取，或等待定时自动收集
-          </p>
-        </div>
+        <EmptyState
+          icon={<Radar className="h-5 w-5" />}
+          title="还没有资讯数据"
+          description="点击右上角「立即收集」开始抓取，或等待定时自动收集"
+        />
       ) : (
-        <div className="grid gap-3">
-          {news.map((item) => (
-            <div
+        <div className="stagger-children grid gap-3">
+          {visibleNews.map((item) => (
+            <article
               key={item.id}
-              className="bg-surface border border-border rounded-xl p-4 hover:shadow-sm transition-shadow flex gap-4"
+              className="card card-hover relative flex gap-4 overflow-hidden p-4"
             >
+              {/* 2px 来源色竖条 */}
+              <span
+                className={`absolute inset-y-0 left-0 w-0.5 ${SOURCE_BAR[item.sourceType]}`}
+                aria-hidden="true"
+              />
               {item.thumbnail && (
                 <img
                   src={item.thumbnail}
                   alt=""
-                  className="w-28 h-16 object-cover rounded-lg shrink-0"
+                  className="h-16 w-28 shrink-0 rounded-lg border border-border object-cover"
                   loading="lazy"
                   onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
                 />
               )}
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${SOURCE_COLORS[item.sourceType]}`}>
+              <div className="min-w-0 flex-1">
+                <div className="mb-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-text-muted">
+                  <Badge variant={SOURCE_VARIANT[item.sourceType]} size="sm">
                     {SOURCE_LABELS[item.sourceType]}
-                  </span>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-text-secondary">
+                  </Badge>
+                  <Badge variant="outline" size="sm">
                     {categoryLabel(item.category)}
-                  </span>
-                  <span className="text-[10px] text-text-secondary">{item.source}</span>
+                  </Badge>
+                  <span className="min-w-0 truncate">{item.source}</span>
                   {item.metrics?.views ? (
-                    <span className="text-[10px] font-medium text-red-500">
-                      🔥 {formatViews(item.metrics.views)} 播放
-                    </span>
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <span className="inline-flex items-center gap-1">
+                        <Flame className="h-3 w-3 shrink-0 text-danger" aria-hidden="true" />
+                        <span className="num">{formatViews(item.metrics.views)}</span> 播放
+                      </span>
+                    </>
                   ) : null}
-                  <span className="text-[10px] text-text-secondary ml-auto">{timeAgo(item.publishedAt)}</span>
+                  <span className="num ml-auto shrink-0">{timeAgo(item.publishedAt)}</span>
                 </div>
-                <h3 className="font-medium text-text text-sm line-clamp-2 mb-1">
-                  <a href={item.url} target="_blank" rel="noopener noreferrer" className="hover:text-primary">
+                <h3 className="text-sm font-medium leading-snug tracking-tight text-text line-clamp-2">
+                  <a
+                    href={item.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="transition-colors hover:text-primary"
+                  >
                     {item.translatedTitle || item.title}
                   </a>
                 </h3>
                 {item.translatedTitle && item.translatedTitle !== item.title && (
-                  <p className="text-xs text-text-secondary line-clamp-1 mb-1 italic">
+                  <p className="mt-1 text-xs italic text-text-muted line-clamp-1">
                     原文: {item.title}
                   </p>
                 )}
                 {item.summary && (
-                  <p className="text-xs text-text-secondary line-clamp-2">{item.summary}</p>
+                  <p className="mt-1.5 text-xs leading-relaxed text-text-secondary line-clamp-2">
+                    {item.summary}
+                  </p>
                 )}
-                <div className="flex gap-2 mt-2">
-                  <button
+                <div className="mt-3 flex gap-2">
+                  <Button
+                    variant={item.savedAsTopic ? 'soft' : 'secondary'}
+                    size="xs"
                     onClick={() => handleSaveAsTopic(item)}
-                    className={`text-xs px-2.5 py-1 rounded-lg font-medium transition-colors ${
+                    className={
                       item.savedAsTopic
-                        ? 'bg-green-50 text-green-600 border border-green-200'
-                        : 'border border-primary/30 text-primary hover:bg-primary-light'
-                    }`}
+                        ? 'border border-success/30 bg-success-soft text-success'
+                        : 'border-primary/30 text-primary hover:bg-primary-soft'
+                    }
                   >
+                    {item.savedAsTopic ? (
+                      <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                    ) : (
+                      <BookmarkPlus className="h-3.5 w-3.5" aria-hidden="true" />
+                    )}
                     {item.savedAsTopic ? '已存为选题' : '存为选题'}
-                  </button>
+                  </Button>
                 </div>
               </div>
-            </div>
+            </article>
           ))}
+          {news.length > visibleCount && (
+            <div className="flex justify-center pt-1">
+              <Button
+                variant="secondary"
+                onClick={() => setVisibleCount((count) => count + PAGE_SIZE)}
+              >
+                显示更多（还有 {news.length - visibleCount} 条）
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </div>
