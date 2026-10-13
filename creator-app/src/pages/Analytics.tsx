@@ -1,7 +1,10 @@
-import { useEffect, useState, useMemo, lazy, Suspense, useId } from 'react';
-import { api, type AccountInfo, type SyncResult, type SyncHistoryEntry } from '../api/client';
+import { useEffect, useRef, useState, useMemo, lazy, Suspense, useId } from 'react';
+import { api, AUTH_TOKEN_KEY, type AccountInfo, type SyncResult, type SyncHistoryEntry } from '../api/client';
 import { useTopicStore } from '../store/topicStore';
 import { useAuthStore } from '../services/authService';
+// 小时级本地缓存：账号统计只有「手动同步」或「改抖音数据」时才会变，
+// 没必要每次打开都去服务端读一遍云端快照（本机实测 1.2～2.0 秒）。
+import { isCacheFresh, loadWithCache, readCache, writeCache } from '../services/queryCache';
 import { formatDeviation, formatViews } from '../utils/prediction';
 import type { BenchmarkSnapshot, RetrospectiveTag } from '../types';
 import { Card } from '../components/ui/Card';
@@ -109,6 +112,29 @@ const fmtRate = (r?: number) => (r === undefined ? '—' : `${(r * 100).toFixed(
 /** 时间窗：null 表示榜单快照口径，不是一个固定时间窗 */
 const fmtWindow = (days: number | null) => (days === null ? '榜单快照' : `近 ${days} 天`);
 
+/** 缓存键。账号维度必须带命名空间：同一浏览器换账号登录不会读到上一个人的统计 */
+const analyticsKey = (table: string, scope: string) => `analytics:${table}:${scope}`;
+
+/**
+ * 缓存命名空间。
+ *
+ * 不用 `useAuthStore.getState().user?.id`：首屏那一刻 token 已经在 localStorage 里，
+ * 但 `user` 要等 /auth/me 回来才有值 —— 同一份数据会先落到一个键、user 就绪后又落到
+ * 另一个键，刷新一次等于没命中缓存，白拉一遍。
+ * 用 token 尾段做不透明命名空间：同一个登录态稳定不变；换账号 / 重新登录必然换 token，
+ * 正好触发一次回源；也绝不会退化成一个所有账号共用的 'anon' 槽位。
+ */
+const cacheScope = () => {
+  try {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    return token ? `t${token.slice(-20)}` : 'anon';
+  } catch {
+    return 'anon';
+  }
+};
+/** 基准线是全站共享数据（不随账号变），单独一个键 */
+const BENCHMARK_CACHE_KEY = 'analytics:benchmark:shared';
+
 // ─── Main Page ─────────────────────────────────────────────
 
 export default function Analytics() {
@@ -124,6 +150,11 @@ export default function Analytics() {
   const [benchmarkLoading, setBenchmarkLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
+  /** 这一屏数据是否直接来自本地缓存（右上角显示「缓存 · N 分钟前」） */
+  const [fromCache, setFromCache] = useState(false);
+  const [cachedAt, setCachedAt] = useState<number | null>(null);
+  /** 同步 / 保存 / 编辑期间，后台的每小时刷新不要插进来改数字 */
+  const busyRef = useRef(false);
   const [retroPlatform, setRetroPlatform] = useState<'all' | 'bilibili' | 'douyin'>('all');
   const [retroSource, setRetroSource] = useState<'all' | 'ai' | 'manual'>('all');
   const [retroCategory, setRetroCategory] = useState('all');
@@ -140,43 +171,91 @@ export default function Analytics() {
       setLoadError('账号运营统计现已按账号隔离。登录后查看并保存你自己的平台统计；选题、脚本与报告仍可继续本地使用。');
       return;
     }
-    loadData();
+    void loadData();
     void loadBenchmark();
   }, []);
+
+  // 页面一直开着时，每小时自动回源一次：缓存一过 TTL 就静默重取，
+  // 期间不打断正在同步或正在编辑抖音数据的用户。
+  useEffect(() => {
+    if (!useAuthStore.getState().token) return;
+    const timer = window.setInterval(() => {
+      if (busyRef.current || document.visibilityState !== 'visible') return;
+      void readCache(analyticsKey('account', cacheScope())).then((cached) => {
+        if (!isCacheFresh(cached?.fetchedAt)) void loadData(false, { silent: true });
+      });
+    }, 60 * 1000);
+    return () => window.clearInterval(timer);
+    // 只装一次定时器：回源函数每次渲染都是新的，用 ref 不需要重新订阅
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    busyRef.current = syncing || saving || editingDouyin;
+  }, [syncing, saving, editingDouyin]);
 
   useEffect(() => {
     loadTopics();
   }, [loadTopics]);
 
-  const loadData = async () => {
-    setInitialLoading(true);
+  /**
+   * 取账号统计。
+   *
+   * 两个接口都要在服务端读一遍云端快照（本机实测 1.2～2.0 秒），但账号数据
+   * 只有「点立即同步」或「改抖音数据」时才会变 —— 所以走小时级本地缓存：
+   * 一小时内重复打开、切页面回来都不再发请求。force=true（错误态点重新加载、
+   * 后台每小时刷新）绕过缓存；silent=true 时不显示整页 loading。
+   */
+  const loadData = async (force = false, options: { silent?: boolean } = {}) => {
+    const scope = cacheScope();
+    if (!options.silent) setInitialLoading(true);
     setLoadError(null);
     try {
       const [status, hist] = await Promise.all([
-        api.getAccount(),
-        api.getSyncHistory(),
+        loadWithCache(analyticsKey('account', scope), () => api.getAccount(), { force }),
+        loadWithCache(analyticsKey('history', scope), () => api.getSyncHistory(), { force }),
       ]);
-      setAccount(status);
-      setHistory(hist);
-      setDouyinForm({
-        followers: status.douyinFollowers || 0,
-        avgViews: status.douyinAvgViews || 0,
-        totalVideos: status.douyinTotalVideos || 0,
-        totalLikes: status.douyinTotalLikes || 0,
-      });
-    } catch (err) {
-      console.error('Failed to load analytics:', err);
-      setLoadError((err as Error).message || '数据暂时无法读取');
+      if (status.data) {
+        const snapshot = status.data;
+        setAccount(snapshot);
+        setDouyinForm({
+          followers: snapshot.douyinFollowers || 0,
+          avgViews: snapshot.douyinAvgViews || 0,
+          totalVideos: snapshot.douyinTotalVideos || 0,
+          totalLikes: snapshot.douyinTotalLikes || 0,
+        });
+        setFromCache(status.fromCache);
+        setCachedAt(status.fetchedAt);
+      }
+      if (hist.data) setHistory(hist.data);
+      const failure = status.error ?? hist.error;
+      if (failure) {
+        console.error('Failed to load analytics:', failure);
+        setLoadError(failure instanceof Error ? failure.message : '数据暂时无法读取');
+      }
     } finally {
-      setInitialLoading(false);
+      if (!options.silent) setInitialLoading(false);
     }
   };
 
-  // 基准线。ready=false 时界面显示「暂无基准数据」，不显示任何占位数字。
-  const loadBenchmark = async (force = false) => {
+  /**
+   * 基准线。ready=false 时界面显示「暂无基准数据」，不显示任何占位数字。
+   *
+   * GET /api/benchmark 只是读服务端快照（本机 13ms），同样按小时缓存；
+   * 「重新采集」是显式动作，直接 POST /benchmark/refresh 并把结果写回缓存。
+   */
+  const loadBenchmark = async (options: { refresh?: boolean } = {}) => {
     setBenchmarkLoading(true);
     try {
-      setBenchmark(force ? await api.refreshBenchmark() : await api.getBenchmark());
+      if (options.refresh) {
+        const snapshot = await api.refreshBenchmark();
+        setBenchmark(snapshot);
+        await writeCache(BENCHMARK_CACHE_KEY, snapshot);
+      } else {
+        const res = await loadWithCache(BENCHMARK_CACHE_KEY, () => api.getBenchmark());
+        if (res.data) setBenchmark(res.data);
+        if (res.error) console.error('Failed to load benchmark:', res.error);
+      }
     } catch (err) {
       console.error('Failed to load benchmark:', err);
     } finally {
@@ -193,6 +272,12 @@ export default function Analytics() {
       setAccount(result.accountInfo);
       const hist = await api.getSyncHistory();
       setHistory(hist);
+      // 手动同步是最权威的一次回源：顺手刷新缓存，切页面回来不必再拉
+      const scope = cacheScope();
+      const fetchedAt = await writeCache(analyticsKey('account', scope), result.accountInfo);
+      await writeCache(analyticsKey('history', scope), hist);
+      setCachedAt(fetchedAt);
+      setFromCache(false);
     } catch (err) {
       toast.error('同步失败：' + (err as Error).message);
     } finally {
@@ -210,6 +295,8 @@ export default function Analytics() {
         douyinTotalLikes: douyinForm.totalLikes,
       });
       setAccount(updated);
+      // 本地改动同样写回缓存，避免下一次打开又看到旧数字
+      await writeCache(analyticsKey('account', cacheScope()), updated);
       setEditingDouyin(false);
     } catch (err) {
       toast.error('保存失败：' + (err as Error).message);
@@ -367,7 +454,7 @@ export default function Analytics() {
             icon={<Activity className="h-5 w-5" />}
             title="数据暂时无法加载"
             description={loadError}
-            action={<Button variant="secondary" onClick={() => void loadData()}>重新加载</Button>}
+            action={<Button variant="secondary" onClick={() => void loadData(true)}>重新加载</Button>}
           />
         </div>
       );
@@ -438,6 +525,12 @@ export default function Analytics() {
             {tab.icon} {tab.label}
           </button>
         ))}
+        <span
+          className="num ml-auto shrink-0 text-xs text-text-muted"
+          title="数据看板每小时自动回源一次，期间直接用本机缓存；点右上角「立即同步」可立刻获取最新平台数据"
+        >
+          {fromCache && cachedAt ? `缓存 · ${formatSyncTime(cachedAt)}` : '刚刚更新'}
+        </span>
       </div>
 
       {/* ─── Overview Tab ─── */}
@@ -911,7 +1004,7 @@ export default function Analytics() {
                 <Button
                   variant="secondary"
                   size="sm"
-                  onClick={() => void loadBenchmark(true)}
+                  onClick={() => void loadBenchmark({ refresh: true })}
                   disabled={benchmarkLoading}
                   loading={benchmarkLoading}
                 >
