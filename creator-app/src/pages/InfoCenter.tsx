@@ -8,6 +8,9 @@ import { EmptyState } from '../components/ui/EmptyState';
 import { PageHeader } from '../components/ui/PageHeader';
 import { LoadingBlock } from '../components/ui/Spinner';
 import { Stat } from '../components/ui/Stat';
+import { Input } from '../components/ui/Input';
+import { useToast } from '../components/ui/Toast';
+import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { cn } from '../utils/cn';
 import { clearCache, loadWithCache } from '../services/queryCache';
 import { BookmarkPlus, Check, Flame, Languages, Newspaper, Radar, Radio, RefreshCw } from 'lucide-react';
@@ -76,6 +79,7 @@ const entranceDelay = (i: number) =>
 
 export default function InfoCenter() {
   const { addTopic } = useTopicStore();
+  const toast = useToast();
   const [news, setNews] = useState<NewsItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [collecting, setCollecting] = useState(false);
@@ -87,6 +91,8 @@ export default function InfoCenter() {
   const [filter, setFilter] = useState<string>('all');
   const [sourceFilter, setSourceFilter] = useState<'all' | 'youtube' | 'bilibili' | 'rss'>('all');
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const [query, setQuery] = useState('');
+  const [retranslateConfirm, setRetranslateConfirm] = useState(false);
 
   /**
    * 取资讯列表。
@@ -143,28 +149,32 @@ export default function InfoCenter() {
       await clearCache('news:');
       await loadNews(true);
     } catch (err) {
-      alert('收集失败: ' + (err as Error).message);
+      toast.error('收集失败：' + (err as Error).message);
     } finally {
       setCollecting(false);
     }
   };
 
   const handleRetranslate = async () => {
-    if (!confirm('确定重新翻译全部新闻标题？这会清空现有翻译并重新生成。')) return;
     setRetranslating(true);
     try {
       const result = await api.retranslate();
       await clearCache('news:');
       await loadNews(true);
-      alert(`已重新翻译 ${result.translated}/${result.total} 条标题`);
+      toast.success(`已重新翻译 ${result.translated}/${result.total} 条标题`);
+      setRetranslateConfirm(false);
     } catch (err) {
-      alert('重新翻译失败: ' + (err as Error).message);
+      toast.error('重新翻译失败：' + (err as Error).message);
     } finally {
       setRetranslating(false);
     }
   };
 
   const handleSaveAsTopic = async (item: NewsItem) => {
+    if (item.savedAsTopic) {
+      toast.info('这条资讯已经保存为选题');
+      return;
+    }
     // 资讯的品类可能是采集用的「综合资讯」(general)，它不是创作品类。
     // 存成选题时必须落到一个真正的创作品类，否则看板的品类筛选器里看不到它。
     const category = isCreativeCategory(item.category) ? item.category : DEFAULT_CATEGORY;
@@ -180,7 +190,7 @@ export default function InfoCenter() {
       gameDescription: item.summary || '',
     });
     await api.markAsTopic(item.id);
-    alert('已保存为选题！');
+    toast.success('已保存为选题');
   };
 
   // ── 顶部指标：全部由已加载的 news 现算，不额外发请求、不编造数据 ──
@@ -189,7 +199,11 @@ export default function InfoCenter() {
   const todayCount = news.filter((n) => nowMs - n.publishedAt < DAY_MS).length;
   const platformCount = new Set(news.map((n) => n.sourceType)).size;
   const savedCount = news.filter((n) => n.savedAsTopic).length;
-  const visibleNews = news.slice(0, visibleCount);
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const filteredNews = normalizedQuery
+    ? news.filter((item) => `${item.title} ${item.translatedTitle ?? ''} ${item.summary} ${item.source}`.toLocaleLowerCase().includes(normalizedQuery))
+    : news;
+  const visibleNews = filteredNews.slice(0, visibleCount);
 
   return (
     <div>
@@ -209,7 +223,7 @@ export default function InfoCenter() {
               <RefreshCw className="h-4 w-4" aria-hidden="true" />
               刷新
             </Button>
-            <Button variant="secondary" onClick={handleRetranslate} loading={retranslating}>
+            <Button variant="secondary" onClick={() => setRetranslateConfirm(true)} loading={retranslating}>
               <Languages className="h-4 w-4" aria-hidden="true" />
               {retranslating ? '翻译中...' : '重新翻译'}
             </Button>
@@ -296,19 +310,25 @@ export default function InfoCenter() {
         </span>
       </div>
 
-      {loadError && news.length > 0 && (
+      <label className="relative mb-4 block w-full sm:max-w-sm">
+        <span className="sr-only">搜索资讯</span>
+        <Input type="search" value={query} onChange={(event) => { setQuery(event.target.value); setVisibleCount(PAGE_SIZE); }} placeholder="搜索标题、摘要或来源…" />
+      </label>
+
+      {loadError && (
         <p className="mb-4 rounded-xl border border-border bg-surface px-3 py-2 text-xs text-text-secondary">
-          刷新失败（{loadError}），下面是本机缓存的上一次结果。
+          {news.length > 0 ? `刷新失败（${loadError}），下面是本机缓存的上一次结果。` : `资讯加载失败：${loadError}`}
         </p>
       )}
 
       {loading && news.length === 0 ? (
         <LoadingBlock label="正在读取本地资讯…" />
-      ) : news.length === 0 ? (
+      ) : filteredNews.length === 0 ? (
         <EmptyState
           icon={<Radar className="h-5 w-5" />}
-          title="还没有资讯数据"
-          description="点击右上角「立即收集」开始抓取，或等待定时自动收集"
+          title={news.length ? '没有匹配的资讯' : loadError ? '资讯暂时无法加载' : '还没有资讯数据'}
+          description={news.length ? '换个关键词试试，或清空搜索条件。' : loadError ? '检查服务连接后重试，或稍后再试。' : '点击右上角「立即收集」开始抓取，或等待定时自动收集'}
+          action={news.length ? <Button variant="secondary" onClick={() => setQuery('')}>清空搜索</Button> : loadError ? <Button variant="secondary" onClick={() => void loadNews(true)}>重新加载</Button> : undefined}
         />
       ) : (
         <div className="grid gap-3">
@@ -383,7 +403,8 @@ export default function InfoCenter() {
                   <Button
                     variant={item.savedAsTopic ? 'soft' : 'secondary'}
                     size="xs"
-                    onClick={() => handleSaveAsTopic(item)}
+                    onClick={() => void handleSaveAsTopic(item)}
+                    disabled={item.savedAsTopic}
                     className={
                       item.savedAsTopic
                         ? 'border border-success/30 bg-success-soft text-success'
@@ -413,6 +434,15 @@ export default function InfoCenter() {
           )}
         </div>
       )}
+      <ConfirmDialog
+        open={retranslateConfirm}
+        title="重新翻译全部资讯标题？"
+        description="这会清空现有翻译并重新生成，耗时可能较长。"
+        confirmLabel="开始重新翻译"
+        pending={retranslating}
+        onConfirm={() => void handleRetranslate()}
+        onClose={() => setRetranslateConfirm(false)}
+      />
     </div>
   );
 }

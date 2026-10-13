@@ -11,8 +11,11 @@ const ScriptEditor = lazy(() => import('./pages/ScriptEditor'))
 const InfoCenter = lazy(() => import('./pages/InfoCenter'))
 const Analytics = lazy(() => import('./pages/Analytics'))
 const Materials = lazy(() => import('./pages/Materials'))
+const MaterialLibrary = lazy(() => import('./pages/MaterialLibrary'))
 const Report = lazy(() => import('./pages/Report'))
 const Settings = lazy(() => import('./pages/Settings'))
+const ContentExperiments = lazy(() => import('./pages/ContentExperiments'))
+const MarketingBriefs = lazy(() => import('./pages/MarketingBriefs'))
 
 function App() {
   useEffect(() => {
@@ -39,6 +42,9 @@ function App() {
         <Route path="/analytics" element={<Analytics />} />
         <Route path="/report" element={<Report />} />
         <Route path="/materials" element={<Materials />} />
+        <Route path="/library" element={<MaterialLibrary />} />
+        <Route path="/experiments" element={<ContentExperiments />} />
+        <Route path="/marketing-briefs" element={<MarketingBriefs />} />
         <Route path="/settings" element={<Settings />} />
       </Route>
     </Routes>

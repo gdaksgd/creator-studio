@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { AI_NOT_CONFIGURED_MESSAGE, getRequestAiKey, hasAiKey } from './aiContext.js';
 import { db } from '../db.js';
+import { getUserAccountInfo } from './userAnalyticsStore.js';
 import type { TopicEvaluation, ScriptSuggestion, NewsItem, IdeaEvaluation, TitleEvaluation, MaterialAnalysisResponse, AnimeSource } from '../types.js';
 import { getCategory, describeCategory } from '../config/categories.js';
 import { buildBasis, formatBenchmarkForPrompt } from './benchmarkService.js';
@@ -74,14 +75,15 @@ export async function evaluateTopic(
   topicTitle: string,
   category: string,
   notes: string,
-  gameDescription?: string
+  gameDescription?: string,
+  userId?: string
 ): Promise<TopicEvaluation> {
   if (!hasAiKey()) {
     throw new Error(AI_NOT_CONFIGURED_MESSAGE);
   }
 
   const cat = getCategory(category);
-  const accountInfo = db.getAccountInfo();
+  const accountInfo = userId ? await getUserAccountInfo(userId) : null;
   const recentNews = db.getNews()
     .filter((n) => n.category === cat.id)
     .slice(0, 10);
@@ -128,7 +130,7 @@ ${gameInfoSection}
 ## 品类画像（受众与关注点）
 ${categoryBrief(category)}
 
-## 创作者账号情况
+${accountInfo ? `## 创作者账号情况
 - B站粉丝: ${accountInfo.bilibiliFollowers}
 - B站平均播放: ${accountInfo.bilibiliAvgViews}
 - 抖音粉丝: ${accountInfo.douyinFollowers}
@@ -136,6 +138,7 @@ ${categoryBrief(category)}
 - 已发布视频数: ${accountInfo.totalVideos}
 - 活跃天数: ${accountInfo.daysActive}
 - 内容方向: ${accountInfo.contentFocus}
+` : ''}
 
 ## 最近相关热门资讯
 ${newsContext || '暂无数据'}
@@ -195,7 +198,8 @@ export async function evaluateProductionIdea(
   topicTitle: string,
   category: string,
   productionIdea: string,
-  gameDescription?: string
+  gameDescription?: string,
+  userId?: string
 ): Promise<IdeaEvaluation> {
   if (!hasAiKey()) {
     throw new Error(AI_NOT_CONFIGURED_MESSAGE);
@@ -206,7 +210,7 @@ export async function evaluateProductionIdea(
   }
 
   const cat = getCategory(category);
-  const accountInfo = db.getAccountInfo();
+  const accountInfo = userId ? await getUserAccountInfo(userId) : null;
   const recentNews = db.getNews()
     .filter((n) => n.category === cat.id)
     .slice(0, 5);
@@ -238,10 +242,11 @@ ${gameInfoSection}
 ## 创作者的制作思路
 ${productionIdea}
 
-## 创作者账号情况
+${accountInfo ? `## 创作者账号情况
 - B站粉丝: ${accountInfo.bilibiliFollowers}，平均播放: ${accountInfo.bilibiliAvgViews}
 - 抖音粉丝: ${accountInfo.douyinFollowers}，平均播放: ${accountInfo.douyinAvgViews}
 - 已发布视频: ${accountInfo.totalVideos}个，活跃${accountInfo.daysActive}天
+` : ''}
 
 ## 最近相关热门内容
 ${newsContext || '暂无数据'}

@@ -31,6 +31,8 @@ export interface StatProps {
   tone?: StatTone;
   /** 悬停轻微抬起；放在弹窗里的评分卡传 false，避免整块面板跟着上浮 */
   interactive?: boolean;
+  /** Flat mode for KPI strips embedded in a larger surface. */
+  appearance?: 'card' | 'flat';
   className?: string;
 }
 
@@ -71,13 +73,16 @@ export function Stat({
   positiveIsGood = true,
   tone = 'primary',
   interactive = true,
+  appearance = 'card',
   className,
 }: StatProps) {
   return (
     <div
       className={cn(
-        'group relative overflow-hidden rounded-xl border border-border bg-surface p-4 shadow-card',
-        interactive && 'card-hover',
+        appearance === 'card'
+          ? 'group relative overflow-hidden rounded-xl border border-border bg-surface p-4 shadow-card'
+          : 'group relative min-w-0 p-2 sm:p-3',
+        interactive && appearance === 'card' && 'card-hover',
         className,
       )}
     >
@@ -87,6 +92,7 @@ export function Stat({
           <span
             className={cn(
               'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-transform duration-200 group-hover:scale-105',
+              appearance === 'flat' && 'h-7 w-7 rounded-md',
               TONE[tone],
             )}
           >
@@ -95,7 +101,7 @@ export function Stat({
         )}
       </div>
       <div className="mt-2.5 flex items-baseline gap-1.5">
-        <span className="num text-[26px] font-semibold leading-none tracking-tight text-text">
+        <span className={cn('num font-semibold leading-none tracking-tight text-text', appearance === 'flat' ? 'text-[24px]' : 'text-[26px]')}>
           {value}
         </span>
         {unit && <span className="text-xs text-text-muted">{unit}</span>}

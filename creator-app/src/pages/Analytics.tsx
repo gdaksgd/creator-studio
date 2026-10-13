@@ -1,19 +1,24 @@
-import { useEffect, useState, useMemo, lazy, Suspense } from 'react';
+import { useEffect, useState, useMemo, lazy, Suspense, useId } from 'react';
 import { api, type AccountInfo, type SyncResult, type SyncHistoryEntry } from '../api/client';
 import { useTopicStore } from '../store/topicStore';
+import { useAuthStore } from '../services/authService';
 import { formatDeviation, formatViews } from '../utils/prediction';
-import type { BenchmarkSnapshot } from '../types';
+import type { BenchmarkSnapshot, RetrospectiveTag } from '../types';
 import { Card } from '../components/ui/Card';
 import { EmptyState } from '../components/ui/EmptyState';
 import { Button } from '../components/ui/Button';
-import { Field, Input } from '../components/ui/Input';
+import { Badge } from '../components/ui/Badge';
+import { Field, Input, Select } from '../components/ui/Input';
 import { SourceNote } from '../components/ui/SourceNote';
 import { Stat } from '../components/ui/Stat';
 import { PageHeader, SectionHeading } from '../components/ui/PageHeader';
 import { Skeleton } from '../components/ui/Skeleton';
+import { LoadingBlock } from '../components/ui/Spinner';
+import { useToast } from '../components/ui/Toast';
 // 只引类型：编译期就被抹掉，不会把 charts.tsx（以及它 import 的 recharts）拉回来
 import type { ComparisonBarsProps, TrendChartProps } from './analytics/charts';
 import { CHART } from './analytics/tokens';
+import { CATEGORIES } from '../config/categories';
 import {
   Activity,
   Clapperboard,
@@ -45,6 +50,28 @@ function ChartSkeleton({ height = 280 }: { height?: number }) {
       <Skeleton className="h-full w-full" />
     </div>
   );
+}
+
+function SnapshotTrendChart({ data, height = 220 }: { data: Array<{ day: number; growth: number; sampleSize: number }>; height?: number }) {
+  const gradientId = useId().replace(/:/g, '');
+  const width = 720;
+  const padding = { top: 18, right: 20, bottom: 32, left: 48 };
+  const innerWidth = width - padding.left - padding.right;
+  const innerHeight = height - padding.top - padding.bottom;
+  const maxX = Math.max(1, ...data.map((point) => point.day));
+  const maxY = Math.max(125, Math.ceil(Math.max(100, ...data.map((point) => point.growth)) / 25) * 25);
+  const points = data.map((point) => ({ ...point, x: padding.left + (point.day / maxX) * innerWidth, y: padding.top + innerHeight - (point.growth / maxY) * innerHeight }));
+  const path = points.map((point, index) => `${index ? 'L' : 'M'} ${point.x} ${point.y}`).join(' ');
+  const areaPath = points.length ? `${path} L ${points[points.length - 1]!.x} ${padding.top + innerHeight} L ${points[0]!.x} ${padding.top + innerHeight} Z` : '';
+  return <div className="w-full overflow-hidden">
+    <svg viewBox={`0 0 ${width} ${height}`} className="w-full" role="img" aria-label="发布后平均播放量相对首个快照的增长曲线">
+      <defs><linearGradient id={gradientId} x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="var(--primary)" stopOpacity=".22"/><stop offset="100%" stopColor="var(--primary)" stopOpacity="0"/></linearGradient></defs>
+      {[0, 0.5, 1].map((ratio) => { const y = padding.top + innerHeight * ratio; const value = Math.round(maxY * (1 - ratio)); return <g key={ratio}><line x1={padding.left} x2={width - padding.right} y1={y} y2={y} stroke="var(--border)" strokeDasharray="3 4"/><text x={padding.left - 8} y={y + 4} textAnchor="end" fill="var(--text-muted)" fontSize="10">{value}%</text></g>; })}
+      {areaPath && <path d={areaPath} fill={`url(#${gradientId})`}/>}
+      {path && <path d={path} fill="none" stroke="var(--primary)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>}
+      {points.map((point) => <g key={point.day}><circle cx={point.x} cy={point.y} r="4" fill="var(--surface)" stroke="var(--primary)" strokeWidth="2"><title>发布后第 {point.day} 天 · 平均 {point.growth.toFixed(1)}% · {point.sampleSize} 个快照</title></circle><text x={point.x} y={height - 9} textAnchor="middle" fill="var(--text-muted)" fontSize="10">D+{point.day}</text></g>)}
+    </svg>
+  </div>;
 }
 
 /** 趋势图：真身在 ./analytics/charts.tsx，这里只负责 lazy + 占位 */
@@ -95,9 +122,24 @@ export default function Analytics() {
   const [activeTab, setActiveTab] = useState<'overview' | 'bilibili' | 'douyin' | 'calibration' | 'benchmark'>('overview');
   const [benchmark, setBenchmark] = useState<BenchmarkSnapshot | null>(null);
   const [benchmarkLoading, setBenchmarkLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [retroPlatform, setRetroPlatform] = useState<'all' | 'bilibili' | 'douyin'>('all');
+  const [retroSource, setRetroSource] = useState<'all' | 'ai' | 'manual'>('all');
+  const [retroCategory, setRetroCategory] = useState('all');
+  const [retroTag, setRetroTag] = useState('all');
+  const toast = useToast();
   const { topics, loadTopics } = useTopicStore();
 
   useEffect(() => {
+    const hasSession = !!useAuthStore.getState().token;
+    if (!hasSession) {
+      setAccount(null);
+      setHistory([]);
+      setInitialLoading(false);
+      setLoadError('账号运营统计现已按账号隔离。登录后查看并保存你自己的平台统计；选题、脚本与报告仍可继续本地使用。');
+      return;
+    }
     loadData();
     void loadBenchmark();
   }, []);
@@ -107,21 +149,26 @@ export default function Analytics() {
   }, [loadTopics]);
 
   const loadData = async () => {
+    setInitialLoading(true);
+    setLoadError(null);
     try {
       const [status, hist] = await Promise.all([
-        api.getStatus(),
+        api.getAccount(),
         api.getSyncHistory(),
       ]);
-      setAccount(status.accountInfo);
+      setAccount(status);
       setHistory(hist);
       setDouyinForm({
-        followers: status.accountInfo.douyinFollowers || 0,
-        avgViews: status.accountInfo.douyinAvgViews || 0,
-        totalVideos: status.accountInfo.douyinTotalVideos || 0,
-        totalLikes: status.accountInfo.douyinTotalLikes || 0,
+        followers: status.douyinFollowers || 0,
+        avgViews: status.douyinAvgViews || 0,
+        totalVideos: status.douyinTotalVideos || 0,
+        totalLikes: status.douyinTotalLikes || 0,
       });
     } catch (err) {
       console.error('Failed to load analytics:', err);
+      setLoadError((err as Error).message || '数据暂时无法读取');
+    } finally {
+      setInitialLoading(false);
     }
   };
 
@@ -147,7 +194,7 @@ export default function Analytics() {
       const hist = await api.getSyncHistory();
       setHistory(hist);
     } catch (err) {
-      alert('同步失败: ' + (err as Error).message);
+      toast.error('同步失败：' + (err as Error).message);
     } finally {
       setSyncing(false);
     }
@@ -165,7 +212,7 @@ export default function Analytics() {
       setAccount(updated);
       setEditingDouyin(false);
     } catch (err) {
-      alert('保存失败: ' + (err as Error).message);
+      toast.error('保存失败：' + (err as Error).message);
     } finally {
       setSaving(false);
     }
@@ -209,9 +256,9 @@ export default function Analytics() {
   const calibration = useMemo(() => {
     const published = topics.filter((t) => t.published);
     const comparable = published
-      .filter((t) => t.estimatedViews > 0 && t.published?.views !== undefined)
+      .filter((t) => (t.prediction?.value ?? t.estimatedViews) > 0 && t.published?.views !== undefined)
       .map((t) => {
-        const predicted = t.estimatedViews;
+        const predicted = t.prediction?.value ?? t.estimatedViews;
         const actual = t.published?.views ?? 0;
         return {
           id: t.id,
@@ -221,12 +268,15 @@ export default function Analytics() {
           absError: Math.abs(actual - predicted) / predicted,
           url: t.published?.url,
           publishedAt: t.published?.publishedAt ?? 0,
+          predictionSource: t.prediction?.source ?? (t.estimatedViews > 0 ? 'ai' as const : undefined),
+          retrospectiveTags: t.retrospective?.tags ?? [],
+          retrospectiveNote: t.retrospective?.note ?? '',
         };
       })
       .sort((a, b) => b.absError - a.absError);
 
     const skipped = published.filter(
-      (t) => !(t.estimatedViews > 0 && t.published?.views !== undefined),
+      (t) => !((t.prediction?.value ?? t.estimatedViews) > 0 && t.published?.views !== undefined),
     );
 
     const meanAbsError =
@@ -247,6 +297,10 @@ export default function Analytics() {
 
     const overestimated = comparable.filter((row) => row.actual < row.predicted).length;
     const underestimated = comparable.filter((row) => row.actual >= row.predicted).length;
+    const realComparable = comparable.filter((row) => !row.id.startsWith('demo-'));
+    const aiSamples = realComparable.filter((row) => row.predictionSource === 'ai');
+    const manualSamples = realComparable.filter((row) => row.predictionSource === 'manual');
+    const meanErrorFor = (rows: typeof realComparable) => rows.length ? rows.reduce((sum, row) => sum + row.absError, 0) / rows.length : null;
 
     return {
       publishedCount: published.length,
@@ -256,14 +310,70 @@ export default function Analytics() {
       medianRatio,
       overestimated,
       underestimated,
+      aiSamples: aiSamples.length,
+      manualSamples: manualSamples.length,
+      aiMeanError: meanErrorFor(aiSamples),
+      manualMeanError: meanErrorFor(manualSamples),
     };
   }, [topics]);
 
+  const visibleCalibration = useMemo(() => calibration.comparable.filter((row) => {
+      const topic = topics.find((item) => item.id === row.id);
+      if (!topic) return false;
+      if (topic.id.startsWith('demo-')) return false;
+    if (retroPlatform !== 'all' && topic.published?.platform !== retroPlatform) return false;
+    if (retroSource !== 'all' && row.predictionSource !== retroSource) return false;
+    if (retroCategory !== 'all' && topic.category !== retroCategory) return false;
+    if (retroTag !== 'all' && !row.retrospectiveTags.includes(retroTag as RetrospectiveTag)) return false;
+    return true;
+  }), [calibration.comparable, retroCategory, retroPlatform, retroSource, retroTag, topics]);
+  const visibleMetrics = useMemo(() => {
+    const rows = visibleCalibration;
+    if (!rows.length) return { meanAbsError: null, medianRatio: null, overestimated: 0, underestimated: 0 };
+    const meanAbsError = rows.reduce((sum, row) => sum + row.absError, 0) / rows.length;
+    const ratios = rows.map((row) => row.actual / row.predicted).sort((a, b) => a - b);
+    const middle = Math.floor(ratios.length / 2);
+    const medianRatio = ratios.length % 2 ? ratios[middle] ?? null : ((ratios[middle - 1] ?? 0) + (ratios[middle] ?? 0)) / 2;
+    return { meanAbsError, medianRatio, overestimated: rows.filter((row) => row.actual < row.predicted).length, underestimated: rows.filter((row) => row.actual >= row.predicted).length };
+  }, [visibleCalibration]);
+
+  const snapshotTrend = useMemo(() => {
+    const points = new Map<number, number[]>();
+    for (const row of visibleCalibration) {
+      const topic = topics.find((item) => item.id === row.id);
+      const publishedAt = topic?.published?.publishedAt;
+      const snapshots = topic?.published?.snapshots ?? [];
+      if (!publishedAt || snapshots.length < 2) continue;
+      const baseline = snapshots[0]?.views;
+      if (baseline === undefined) continue;
+      for (const snapshot of snapshots) {
+        if (snapshot.views === undefined) continue;
+        const day = Math.max(0, Math.floor((snapshot.fetchedAt - publishedAt) / 86400000));
+        const growth = baseline > 0 ? (snapshot.views / baseline) * 100 : 100;
+        const bucket = points.get(day) ?? [];
+        bucket.push(growth);
+        points.set(day, bucket);
+      }
+    }
+    return [...points.entries()].sort(([a], [b]) => a - b).map(([day, values]) => ({ day, growth: values.reduce((sum, value) => sum + value, 0) / values.length, sampleSize: values.length }));
+  }, [topics, visibleCalibration]);
+
   if (!account) {
+    if (loadError && !initialLoading) {
+      return (
+        <div className="space-y-4">
+          <PageHeader eyebrow="数据 / ANALYTICS" title="数据看板" description="账号指标与平台增长趋势汇总。" />
+          <EmptyState
+            icon={<Activity className="h-5 w-5" />}
+            title="数据暂时无法加载"
+            description={loadError}
+            action={<Button variant="secondary" onClick={() => void loadData()}>重新加载</Button>}
+          />
+        </div>
+      );
+    }
     return (
-      <div className="flex items-center justify-center py-20">
-        <div className="text-text-secondary text-sm">加载中...</div>
-      </div>
+      <LoadingBlock label="正在加载数据看板…" />
     );
   }
 
@@ -622,10 +732,10 @@ export default function Analytics() {
       {activeTab === 'calibration' && (
         <div className="stagger-children space-y-6">
           <Card padding="lg">
-            <SectionHeading title="预测 vs 实际" hint="只统计两边都有数的选题" />
+            <SectionHeading title="预测 vs 实际" hint="AI 预测与人工目标分来源统计" />
             <p className="mb-4 text-xs leading-relaxed text-text-secondary">
-              只统计「既有数字化预测、又有真实播放数据」的选题。缺任何一边都不参与统计——
-              不补 0、不猜、不插值。实际数据由 B站接口取回。
+              只统计同时具备预测值与真实播放量的选题。预测值来源可能是 AI 评估或人工目标，会逐条标记；
+              缺任何一边都不参与统计，不补 0、不猜、不插值。实际数据来自 B站接口。
             </p>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <Stat
@@ -638,7 +748,7 @@ export default function Analytics() {
               />
               <Stat
                 label="可对比样本"
-                value={String(calibration.comparable.length)}
+                value={String(visibleCalibration.length)}
                 unit="条"
                 icon={Layers}
                 tone="primary"
@@ -647,9 +757,9 @@ export default function Analytics() {
               <Stat
                 label="平均绝对偏差"
                 value={
-                  calibration.meanAbsError === null
+                  visibleMetrics.meanAbsError === null
                     ? '—'
-                    : `${(calibration.meanAbsError * 100).toFixed(1)}%`
+                    : `${(visibleMetrics.meanAbsError * 100).toFixed(1)}%`
                 }
                 icon={Target}
                 tone="danger"
@@ -657,38 +767,67 @@ export default function Analytics() {
               />
               <Stat
                 label="实际 / 预测 中位数"
-                value={calibration.medianRatio === null ? '—' : `${calibration.medianRatio.toFixed(2)}×`}
+                value={visibleMetrics.medianRatio === null ? '—' : `${visibleMetrics.medianRatio.toFixed(2)}×`}
                 icon={Activity}
                 tone="warning"
                 hint="1.00 表示无系统性偏差"
               />
             </div>
-            {calibration.comparable.length > 0 && (
+            <div className="mt-4 grid gap-2 sm:grid-cols-2">
+              <div className="rounded-xl border border-border bg-surface-muted/40 px-3.5 py-3 text-xs">
+                <div className="font-medium text-text">AI 预测</div>
+                <div className="mt-1 text-text-secondary">{visibleCalibration.filter((row) => row.predictionSource === 'ai').length} 个样本 · 平均绝对偏差 {(() => { const rows = visibleCalibration.filter((row) => row.predictionSource === 'ai'); return rows.length ? `${(rows.reduce((sum, row) => sum + row.absError, 0) / rows.length * 100).toFixed(1)}%` : '—'; })()}</div>
+              </div>
+              <div className="rounded-xl border border-border bg-surface-muted/40 px-3.5 py-3 text-xs">
+                <div className="font-medium text-text">人工目标</div>
+                <div className="mt-1 text-text-secondary">{visibleCalibration.filter((row) => row.predictionSource === 'manual').length} 个样本 · 平均绝对偏差 {(() => { const rows = visibleCalibration.filter((row) => row.predictionSource === 'manual'); return rows.length ? `${(rows.reduce((sum, row) => sum + row.absError, 0) / rows.length * 100).toFixed(1)}%` : '—'; })()}</div>
+              </div>
+            </div>
+            {visibleCalibration.length > 0 && (
               <p className="mt-4 text-xs text-text-muted">
-                其中 高估 <span className="num text-danger">{calibration.overestimated}</span> 条 ·
-                低估 <span className="num text-success">{calibration.underestimated}</span> 条
+                当前筛选中高估 <span className="num text-danger">{visibleMetrics.overestimated}</span> 条 ·
+                低估 <span className="num text-success">{visibleMetrics.underestimated}</span> 条
               </p>
             )}
           </Card>
 
-          {calibration.comparable.length > 0 ? (
+          <Card padding="lg">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div><SectionHeading title="发布后播放增长" hint="相对首个成功取数快照；不是预测因果" className="mb-1"/><p className="text-xs text-text-muted">只展示至少有两次成功取数的内容；每个点标注快照数。</p></div>
+              <Badge variant="neutral">{visibleCalibration.filter((row) => (topics.find((topic) => topic.id === row.id)?.published?.snapshots?.length ?? 0) >= 2).length} 条可画曲线</Badge>
+            </div>
+            {snapshotTrend.length > 0 ? <div className="mt-3"><SnapshotTrendChart data={snapshotTrend}/><p className="mt-1 text-[10px] text-text-muted">纵轴：相对首个快照播放量（100% 为持平）；横轴：发布后天数。每个时点对所有符合筛选的快照取平均。</p></div> : <EmptyState compact className="mt-4" title="快照样本不足，暂时无法画趋势" description="至少有一条已发布内容成功刷新两次以上，才会生成增长曲线。"/>}
+          </Card>
+
+          <Card padding="lg">
+            <SectionHeading title="复盘筛选" hint="影响因素标签是人工记录，不作因果解释" className="mb-3"/>
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <Field label="平台"><Select value={retroPlatform} onChange={(event) => setRetroPlatform(event.target.value as typeof retroPlatform)}><option value="all">全部平台</option><option value="bilibili">B站</option><option value="douyin">抖音</option></Select></Field>
+              <Field label="预测来源"><Select value={retroSource} onChange={(event) => setRetroSource(event.target.value as typeof retroSource)}><option value="all">全部来源</option><option value="ai">AI 预测</option><option value="manual">人工目标</option></Select></Field>
+              <Field label="品类"><Select value={retroCategory} onChange={(event) => setRetroCategory(event.target.value)}><option value="all">全部品类</option>{CATEGORIES.map((category) => <option key={category.id} value={category.id}>{category.label}</option>)}</Select></Field>
+              <Field label="复盘标签"><Select value={retroTag} onChange={(event) => setRetroTag(event.target.value)}><option value="all">全部标签</option>{[...new Set(topics.flatMap((topic) => topic.retrospective?.tags ?? []))].map((tag) => <option key={tag} value={tag}>{tag}</option>)}</Select></Field>
+            </div>
+            <p className="mt-3 text-xs text-text-muted">当前筛选 {visibleCalibration.length} 个预测/实际样本{visibleCalibration.length < 5 ? '；样本较少，只用于浏览，不应据此推断稳定规律。' : '。'} 具备人工复盘标签：{visibleCalibration.filter((row) => row.retrospectiveTags.length > 0).length} 个。</p>
+          </Card>
+
+          {visibleCalibration.length > 0 ? (
             <Card padding="none" className="overflow-hidden">
               <div className="border-b border-border px-5 py-4">
-                <SectionHeading title="逐条对比" hint="偏差从大到小" className="mb-0" />
+                <SectionHeading title="逐条对比" hint={`${visibleCalibration.length} 条 · 当前筛选后，偏差从大到小`} className="mb-0" />
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-border text-xs text-text-muted">
                       <th className="py-2.5 pl-5 pr-3 text-left font-medium">选题</th>
-                      <th className="px-2 py-2.5 text-right font-medium">预测</th>
+                      <th className="px-2 py-2.5 text-right font-medium">预测 / 来源</th>
                       <th className="px-2 py-2.5 text-right font-medium">实际</th>
                       <th className="px-2 py-2.5 text-right font-medium">偏差</th>
                       <th className="py-2.5 pl-2 pr-5 text-right font-medium">发布日</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
-                    {calibration.comparable.map((row) => (
+                    {visibleCalibration.map((row) => (
                       <tr key={row.id} className="transition-colors hover:bg-surface-hover">
                         <td className="max-w-[280px] py-2.5 pl-5 pr-3">
                           {row.url ? (
@@ -706,7 +845,7 @@ export default function Analytics() {
                           )}
                         </td>
                         <td className="num whitespace-nowrap px-2 text-right text-text-secondary">
-                          {formatViews(row.predicted)}
+                          {formatViews(row.predicted)} <span className="ml-1 text-[10px] text-text-muted">{row.predictionSource === 'manual' ? '人工' : 'AI'}</span>
                         </td>
                         <td className="num whitespace-nowrap px-2 text-right font-medium">
                           {formatViews(row.actual)}
@@ -718,8 +857,10 @@ export default function Analytics() {
                         >
                           {formatDeviation(row.predicted, row.actual)}
                         </td>
-                        <td className="num whitespace-nowrap py-2.5 pl-2 pr-5 text-right text-xs text-text-secondary">
-                          {row.publishedAt ? new Date(row.publishedAt).toLocaleDateString('zh-CN') : '—'}
+                        <td className="min-w-40 py-2.5 pl-2 pr-5 text-right text-xs text-text-secondary">
+                          <div className="num">{row.publishedAt ? new Date(row.publishedAt).toLocaleDateString('zh-CN') : '—'}</div>
+                          {row.retrospectiveTags.length > 0 && <div className="mt-1 flex justify-end gap-1">{row.retrospectiveTags.slice(0, 2).map((tag) => <span key={tag} className="rounded bg-surface-muted px-1.5 py-0.5 text-[9px]">{tag}</span>)}</div>}
+                          {row.retrospectiveNote && <div className="mt-1 max-w-48 truncate text-[10px] text-text-muted" title={row.retrospectiveNote}>{row.retrospectiveNote}</div>}
                         </td>
                       </tr>
                     ))}
@@ -731,25 +872,25 @@ export default function Analytics() {
             <EmptyState
               icon={<Target className="h-5 w-5" />}
               title="还没有可对比的样本"
-              description="去「选题看板」给选题做一次 AI 评估（会记下预测值），发布之后点「记录发布」粘贴视频链接，这里就会自动出现对比。"
+                description="去「选题看板」通过 AI 评估记录预测值，或手动填写播放目标；再发布并回填真实数据，即可开始校准。"
             />
           )}
 
-          {calibration.skipped.length > 0 && (
+          {calibration.skipped.filter((topic) => !topic.id.startsWith('demo-')).length > 0 && (
             <Card padding="lg">
               <SectionHeading
                 title="未参与统计"
-                hint={`${calibration.skipped.length} 条`}
+                hint={`${calibration.skipped.filter((topic) => !topic.id.startsWith('demo-')).length} 条`}
               />
               <p className="mb-3 text-xs leading-relaxed text-text-secondary">
                 这些选题已有发布记录，但缺少预测值或实际播放数据，因此不计入上面的偏差统计。
               </p>
               <ul className="space-y-1.5 text-sm">
-                {calibration.skipped.map((t) => (
+                {calibration.skipped.filter((topic) => !topic.id.startsWith('demo-')).map((t) => (
                   <li key={t.id} className="flex items-center gap-3 text-text-secondary">
                     <span className="flex-1 truncate" title={t.title}>{t.title}</span>
                     <span className="shrink-0 rounded-full bg-warning-soft px-2 py-0.5 text-xs text-warning">
-                      {t.estimatedViews > 0 ? '缺实际数据' : '缺预测值'}
+                      {(t.prediction?.value ?? t.estimatedViews) > 0 ? '缺实际数据' : '缺预测值'}
                     </span>
                   </li>
                 ))}

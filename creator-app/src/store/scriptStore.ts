@@ -11,15 +11,97 @@ interface ScriptStore {
   createScript: (topicId: string, platform: Platform, version: 'long' | 'short') => Promise<Script>;
   updateScript: (id: string, updates: Partial<Script>) => void;
   updateStoryboard: (scriptId: string, boardId: string, updates: Partial<Storyboard>) => void;
+  replaceStoryboards: (scriptId: string, boards: Storyboard[]) => Promise<void>;
   addStoryboard: (scriptId: string) => Promise<void>;
   removeStoryboard: (scriptId: string, boardId: string) => Promise<void>;
   reorderStoryboards: (scriptId: string, boardIds: string[]) => Promise<void>;
   deleteScript: (id: string) => Promise<void>;
+  flushPendingWrites: () => void;
+  saveRevision: (id: string, label?: string) => Promise<void>;
+  restoreRevision: (id: string, revisionId: string) => Promise<void>;
 }
 
-export const useScriptStore = create<ScriptStore>((set, get) => ({
+export const useScriptStore = create<ScriptStore>((set, get) => {
+  // Keep keystrokes responsive in memory, but coalesce IndexedDB writes while the
+  // user is typing. This avoids one disk write + sync debounce per character.
+  const persistTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const persistScriptSoon = (id: string) => {
+    const previous = persistTimers.get(id);
+    if (previous) clearTimeout(previous);
+    persistTimers.set(id, setTimeout(() => {
+      persistTimers.delete(id);
+      const latest = get().scripts.find((script) => script.id === id);
+      if (!latest) return;
+      void db.scripts.put(latest).then(() => scheduleSyncUpload());
+    }, 350));
+  };
+  const flushPendingWrites = () => {
+    for (const [id, timer] of persistTimers) {
+      clearTimeout(timer);
+      const latest = get().scripts.find((script) => script.id === id);
+      if (latest) void db.scripts.put(latest).then(() => scheduleSyncUpload());
+    }
+    persistTimers.clear();
+  };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('pagehide', flushPendingWrites);
+    window.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') flushPendingWrites();
+    });
+  }
+
+  return ({
   scripts: [],
   loading: false,
+  flushPendingWrites,
+  saveRevision: async (id, label = '手动保存') => {
+    const script = get().scripts.find((item) => item.id === id);
+    if (!script) return;
+    const revision = {
+      id: crypto.randomUUID(),
+      savedAt: Date.now(),
+      label,
+      title: script.title,
+      hook: script.hook,
+      storyboards: script.storyboards.map((board) => ({ ...board })),
+      notes: script.notes,
+      ...(script.platformCheck ? { platformCheck: { ...script.platformCheck } } : {}),
+    };
+    const history = [...(script.history ?? []), revision].slice(-50);
+    const updated = { ...script, history, updatedAt: Date.now() };
+    set((state) => ({ scripts: state.scripts.map((item) => item.id === id ? updated : item) }));
+    await db.scripts.put(updated);
+    scheduleSyncUpload();
+  },
+  restoreRevision: async (id, revisionId) => {
+    const script = get().scripts.find((item) => item.id === id);
+    const revision = script?.history?.find((item) => item.id === revisionId);
+    if (!script || !revision) return;
+    const now = Date.now();
+    const rollback = {
+      id: crypto.randomUUID(),
+      savedAt: now,
+      label: '恢复前自动快照',
+      title: script.title,
+      hook: script.hook,
+      storyboards: script.storyboards.map((board) => ({ ...board })),
+      notes: script.notes,
+      ...(script.platformCheck ? { platformCheck: { ...script.platformCheck } } : {}),
+    };
+    const updated = {
+      ...script,
+      title: revision.title,
+      hook: revision.hook,
+      storyboards: revision.storyboards.map((board) => ({ ...board })),
+      notes: revision.notes,
+      ...(revision.platformCheck ? { platformCheck: { ...revision.platformCheck } } : { platformCheck: undefined }),
+      history: [...(script.history ?? []), rollback].slice(-50),
+      updatedAt: now,
+    };
+    set((state) => ({ scripts: state.scripts.map((item) => item.id === id ? updated : item) }));
+    await db.scripts.put(updated);
+    scheduleSyncUpload();
+  },
 
   loadScripts: async () => {
     set({ loading: true });
@@ -59,8 +141,7 @@ export const useScriptStore = create<ScriptStore>((set, get) => ({
         sc.id === id ? { ...sc, ...updates, updatedAt: now } : sc
       ),
     }));
-    // 持久化改为 fire-and-forget，不阻塞 UI
-    void db.scripts.update(id, { ...updates, updatedAt: now }).then(() => scheduleSyncUpload());
+    persistScriptSoon(id);
   },
 
   updateStoryboard: (scriptId, boardId, updates) => {
@@ -78,9 +159,21 @@ export const useScriptStore = create<ScriptStore>((set, get) => ({
           : sc
       ),
     }));
-    void db.scripts
-      .update(scriptId, { storyboards: newBoards, updatedAt: now })
-      .then(() => scheduleSyncUpload());
+    persistScriptSoon(scriptId);
+  },
+
+  replaceStoryboards: async (scriptId, boards) => {
+    const script = get().scripts.find((item) => item.id === scriptId);
+    if (!script) return;
+    const normalized = boards.map((board, index) => ({ ...board, sceneNumber: index + 1 }));
+    const now = Date.now();
+    const timer = persistTimers.get(scriptId);
+    if (timer) clearTimeout(timer);
+    persistTimers.delete(scriptId);
+    const updated = { ...script, storyboards: normalized, updatedAt: now };
+    set((state) => ({ scripts: state.scripts.map((item) => item.id === scriptId ? updated : item) }));
+    await db.scripts.put(updated);
+    scheduleSyncUpload();
   },
 
   addStoryboard: async (scriptId) => {
@@ -150,4 +243,5 @@ export const useScriptStore = create<ScriptStore>((set, get) => ({
     set((s) => ({ scripts: s.scripts.filter((sc) => sc.id !== id) }));
     scheduleSyncUpload();
   },
-}));
+  });
+});

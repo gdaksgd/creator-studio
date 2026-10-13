@@ -39,10 +39,23 @@ router.post('/upload', requireAuth, async (req, res) => {
     const body = (req.body || {}) as {
       topics?: unknown;
       scripts?: unknown;
+      assets?: unknown;
+      materialFavorites?: unknown;
+      briefAttachments?: unknown;
+      marketingWorkbench?: { experiments?: unknown[]; briefs?: unknown[] };
       uploadedAt?: unknown;
       baseUploadedAt?: unknown;
     };
     const { topics, scripts, uploadedAt, baseUploadedAt } = body;
+    const assets = Array.isArray(body.assets) ? body.assets : undefined;
+    const materialFavorites = Array.isArray(body.materialFavorites) ? body.materialFavorites : undefined;
+    const briefAttachments = Array.isArray(body.briefAttachments) ? body.briefAttachments : undefined;
+    const marketingWorkbench = body.marketingWorkbench && typeof body.marketingWorkbench === 'object' && !Array.isArray(body.marketingWorkbench)
+      ? {
+          experiments: Array.isArray(body.marketingWorkbench.experiments) ? body.marketingWorkbench.experiments : [],
+          briefs: Array.isArray(body.marketingWorkbench.briefs) ? body.marketingWorkbench.briefs : [],
+        }
+      : undefined;
 
     if (!Array.isArray(topics) || !Array.isArray(scripts)) {
       res.status(400).json({ error: '数据格式错误', code: 'BAD_REQUEST' });
@@ -66,7 +79,10 @@ router.post('/upload', requireAuth, async (req, res) => {
       if (Number.isFinite(base) && cloudUploadedAt > base) {
         throw new CloudError(409, 'CONFLICT', '云端有更新，请先下载', { cloudUploadedAt });
       }
-      blob.accounts[userId] = { topics, scripts, uploadedAt: nextUploadedAt };
+      // Preserve other per-user payloads (AI key, platform account analytics,
+      // sync history) when the content workspace syncs its topics/scripts.
+      const current = blob.accounts[userId] ?? { topics: [], scripts: [], uploadedAt: 0 };
+      blob.accounts[userId] = { ...current, topics, scripts, ...(assets ? { assets } : {}), ...(materialFavorites ? { materialFavorites } : {}), ...(briefAttachments ? { briefAttachments } : {}), ...(marketingWorkbench ? { marketingWorkbench } : {}), uploadedAt: nextUploadedAt };
       return { uploadedAt: nextUploadedAt };
     });
 
@@ -96,16 +112,31 @@ router.get('/download', requireAuth, async (req, res) => {
 
     const { blob } = await readCloud();
     const account = blob.accounts[userId];
-    const empty = !account || (account.uploadedAt === 0 && account.topics.length === 0 && account.scripts.length === 0);
+    // 「云端为空」只看内容字段本身。uploadedAt 只是内容版本号，不能单独当作「有内容」的
+    // 证据：账号统计/同步历史的写入曾经 bump 过它，于是「从未上传内容的账号」会返回
+    // uploadedAt>0 + 空数组，前端 syncDownload() 判定云端更新 -> clear() 掉本地唯一副本。
+    const hasContent = !!account && (
+      account.topics.length > 0 ||
+      account.scripts.length > 0 ||
+      !!account.assets?.length ||
+      !!account.materialFavorites?.length ||
+      !!account.briefAttachments?.length ||
+      !!account.marketingWorkbench
+    );
+    const empty = !hasContent;
 
     if (empty) {
-      res.json({ topics: [], scripts: [], uploadedAt: 0, empty: true });
+      res.json({ topics: [], scripts: [], assets: [], materialFavorites: [], briefAttachments: [], marketingWorkbench: undefined, uploadedAt: 0, empty: true });
       return;
     }
 
     res.json({
       topics: account.topics,
       scripts: account.scripts,
+      assets: account.assets ?? [],
+      materialFavorites: account.materialFavorites ?? [],
+      briefAttachments: account.briefAttachments ?? [],
+      marketingWorkbench: account.marketingWorkbench,
       uploadedAt: account.uploadedAt,
       empty: false,
     });

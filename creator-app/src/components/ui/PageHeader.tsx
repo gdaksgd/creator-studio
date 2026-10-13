@@ -68,7 +68,7 @@ export function SectionHeading({
           className="h-4 w-1 shrink-0 rounded-full bg-brand-gradient"
           aria-hidden="true"
         />
-        <h2 className="min-w-0 truncate text-sm font-semibold tracking-tight text-text">
+        <h2 className="min-w-0 truncate text-base font-semibold tracking-tight text-text">
           {title}
         </h2>
         {hint && <span className="min-w-0 truncate text-xs text-text-muted">{hint}</span>}

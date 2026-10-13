@@ -247,6 +247,51 @@ export interface TitleEvaluation {
 
 export type MaterialType = 'bgm' | 'sfx' | 'meme' | 'animation';
 
+export type LibraryAssetType = 'image' | 'video' | 'audio' | 'link' | 'document';
+
+/** User-owned reusable reference, kept in local IndexedDB and optional account sync. */
+export interface LibraryAsset {
+  id: string;
+  title: string;
+  type: LibraryAssetType;
+  url: string;
+  category: GameCategory;
+  tags: string[];
+  note: string;
+  folder?: string;
+  relatedScriptId?: string;
+  lastUsedAt?: number;
+  favorite?: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface MaterialFavorite {
+  id: string;
+  assetId: string;
+  collection: string;
+  note: string;
+  createdAt: number;
+}
+
+export interface BriefAttachment {
+  id: string;
+  briefId: string;
+  assetId: string;
+  note: string;
+  createdAt: number;
+}
+
+export interface MarketingWorkbenchData {
+  experiments: ContentExperiment[];
+  briefs: GameMarketingBrief[];
+}
+
+export interface MarketingWorkbenchRecord extends MarketingWorkbenchData {
+  id: 'workspace';
+  updatedAt: number;
+}
+
 export interface SearchLink {
   platform: string;
   url: string;
@@ -316,6 +361,17 @@ export interface PublishedRecord {
   /** 取数时间（毫秒）；手动填写时等于填写时间 */
   fetchedAt: number;
   source: 'auto' | 'manual';
+  /** 后续回填时间线：同一 BVID 再次刷新时追加快照，不覆盖旧指标历史。 */
+  snapshots?: Array<{
+    fetchedAt: number;
+    views?: number;
+    likes?: number;
+    coins?: number;
+    favorites?: number;
+    shares?: number;
+    comments?: number;
+    danmaku?: number;
+  }>;
 }
 
 export interface Topic {
@@ -324,7 +380,13 @@ export interface Topic {
   category: GameCategory;
   status: TopicStatus;
   difficulty: 1 | 2 | 3 | 4 | 5;
+  /** Display value kept for compatibility with older backups and cloud records. */
   estimatedViews: number;
+  prediction?: {
+    value: number;
+    source: 'ai' | 'manual';
+    updatedAt: number;
+  };
   urgency: 'low' | 'medium' | 'high';
   notes: string;
   productionIdea: string;
@@ -340,6 +402,74 @@ export interface Topic {
    * 不要写成 { views: 0 }——那是「播放量为 0」，与「还没发出去」是两件事。
    */
   published?: PublishedRecord;
+  retrospective?: {
+    tags: RetrospectiveTag[];
+    note: string;
+    updatedAt: number;
+  };
+  contentExperimentIds?: string[];
+  plannedPublishAt?: number;
+  productionDueAt?: number;
+}
+
+export type RetrospectiveTag = 'topic' | 'title' | 'cover' | 'hook' | 'pacing' | 'duration' | 'timing' | 'distribution' | 'production' | 'other';
+
+export type ContentExperimentStatus = 'planned' | 'running' | 'completed' | 'inconclusive';
+export type ExperimentMetric = 'views' | 'likes' | 'comments' | 'coins' | 'favorites' | 'shares';
+
+/** A hypothesis/variable/metric plan; conclusions are written by the user, never auto-claimed causal. */
+export interface ContentExperiment {
+  id: string;
+  title: string;
+  hypothesis: string;
+  variable: string;
+  metric: ExperimentMetric;
+  successThreshold?: number;
+  status: ContentExperimentStatus;
+  topicIds: string[];
+  /** Explicit comparison-group mapping. Missing legacy rows default to variant for display only. */
+  assignments?: Array<{ topicId: string; group: 'control' | 'variant' }>;
+  conclusion: string;
+  nextAction: string;
+  evidenceMode: 'real' | 'demo';
+  minimumSampleSize: number;
+  startedAt: number;
+  completedAt?: number;
+  updatedAt: number;
+}
+
+export type CampaignPhase = 'teaser' | 'launch' | 'sustain';
+
+export interface CampaignPlanItem {
+  id: string;
+  phase: CampaignPhase;
+  publishAt?: number;
+  channel: string;
+  contentAngle: string;
+  linkedTopicId?: string;
+  targetMetric: string;
+  targetValue?: number;
+  status: 'planned' | 'in-progress' | 'published' | 'reviewed';
+}
+
+export interface GameMarketingBrief {
+  id: string;
+  title: string;
+  gameTitle: string;
+  versionName: string;
+  objective: string;
+  targetAudience: string;
+  audienceInsight: string;
+  keySellingPoints: string[];
+  evidenceNotes: string;
+  budgetNote: string;
+  successDefinition: string;
+  plan: CampaignPlanItem[];
+  retrospective: string;
+  linkedExperimentId?: string;
+  dataMode: 'planning' | 'demo' | 'real';
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface Storyboard {
@@ -367,6 +497,19 @@ export interface Script {
    * 平台适配检查面板里手填的内容（封面文案 / CTR / 完播率 / 更新频率）。
    * 随脚本一起落 IndexedDB 并参与云同步，所以关掉页面、重开这条脚本都不会丢。
    */
+  platformCheck?: PlatformCheckInput;
+  /** Bounded snapshots embedded in the script record so they sync with the script. */
+  history?: ScriptRevision[];
+}
+
+export interface ScriptRevision {
+  id: string;
+  savedAt: number;
+  label: string;
+  title: string;
+  hook: string;
+  storyboards: Storyboard[];
+  notes: string;
   platformCheck?: PlatformCheckInput;
 }
 

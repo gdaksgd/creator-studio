@@ -2,6 +2,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -43,8 +44,12 @@ const VARIANT_ICON: Record<ToastVariant, ReactNode> = {
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<ToastItem[]>([]);
   const idRef = useRef(0);
+  const timersRef = useRef(new Map<number, number>());
 
   const remove = useCallback((id: number) => {
+    const timer = timersRef.current.get(id);
+    if (timer) window.clearTimeout(timer);
+    timersRef.current.delete(id);
     setItems((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
@@ -52,10 +57,16 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     (message: string, variant: ToastVariant = 'info') => {
       const id = (idRef.current += 1);
       setItems((prev) => [...prev, { id, message, variant }]);
-      window.setTimeout(() => remove(id), 4000);
+      const timer = window.setTimeout(() => remove(id), 4000);
+      timersRef.current.set(id, timer);
     },
     [remove],
   );
+
+  useEffect(() => () => {
+    for (const timer of timersRef.current.values()) window.clearTimeout(timer);
+    timersRef.current.clear();
+  }, []);
 
   const api = useMemo<ToastApi>(
     () => ({
@@ -70,7 +81,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={api}>
       {children}
-      <div className="pointer-events-none fixed bottom-4 right-4 z-[60] flex w-[min(20rem,calc(100vw-2rem))] flex-col gap-2">
+      <div aria-live="polite" aria-atomic="false" className="pointer-events-none fixed bottom-4 right-4 z-[60] flex w-[min(20rem,calc(100vw-2rem))] flex-col gap-2">
         {items.map((t) => (
           <div
             key={t.id}
@@ -81,7 +92,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             )}
           >
             {VARIANT_ICON[t.variant]}
-            <span className="leading-snug">{t.message}</span>
+            <span className="min-w-0 flex-1 leading-snug">{t.message}</span>
+            <button type="button" onClick={() => remove(t.id)} className="-mr-1 -mt-1 rounded p-1 text-current/60 hover:bg-black/5 hover:text-current" aria-label="关闭提示">
+              <X className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
           </div>
         ))}
       </div>

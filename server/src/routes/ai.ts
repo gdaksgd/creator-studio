@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { config, isYouTubeConfigured } from '../config.js';
-import { db } from '../db.js';
+import { db, defaultAccountInfo, getLegacySharedAccountAnalytics } from '../db.js';
 import { evaluateTopic, suggestScript, generateScriptDraft, evaluateProductionIdea, evaluateScriptTitle, analyzeMaterialNeeds, translateTitles, polishCoverCopy } from '../services/aiService.js';
 import type { CoverPolishResult } from '../services/aiService.js';
 import { checkPlatform, normalizePlatform } from '../services/platformRules.js';
@@ -10,6 +10,9 @@ import { optionalAuth } from '../middleware/optionalAuth.js';
 import type { AuthedRequest } from '../middleware/requireAuth.js';
 import { decodeAccountKey } from '../services/aiConfigStore.js';
 import { AI_NOT_CONFIGURED_MESSAGE, hasAiKey, runWithAiKey } from '../services/aiContext.js';
+import { claimLegacyAnalyticsForUser, getUserAccountInfo, getUserSyncHistory, getUserSyncStatus, hasUserAccountAnalytics, isLegacyClaimOwner, legacyAnalyticsHasData, sanitizeAccountInfoPatch, updateUserAccountInfo } from '../services/userAnalyticsStore.js';
+import { requireAuth } from '../middleware/requireAuth.js';
+import { getLegacyAccountAnalyticsClaimStatus } from '../services/cloudStore.js';
 
 const router = Router();
 
@@ -51,7 +54,8 @@ router.post('/evaluate-topic', async (req, res) => {
       return res.status(400).json({ error: '缺少选题标题' });
     }
 
-    const result = await evaluateTopic(topicTitle, category || DEFAULT_CATEGORY, notes || '', gameDescription);
+    const userId = (req as AiRequest).authUser?.id;
+    const result = await evaluateTopic(topicTitle, category || DEFAULT_CATEGORY, notes || '', gameDescription, userId);
     res.json(result);
   } catch (err: any) {
     console.error('[AI] Topic evaluation error:', err);
@@ -74,7 +78,8 @@ router.post('/evaluate-idea', async (req, res) => {
       return res.status(400).json({ error: '请先填写制作思路' });
     }
 
-    const result = await evaluateProductionIdea(topicTitle, category || DEFAULT_CATEGORY, productionIdea, gameDescription);
+    const userId = (req as AiRequest).authUser?.id;
+    const result = await evaluateProductionIdea(topicTitle, category || DEFAULT_CATEGORY, productionIdea, gameDescription, userId);
     res.json(result);
   } catch (err: any) {
     console.error('[AI] Idea evaluation error:', err);
@@ -210,19 +215,32 @@ router.post('/generate-script', async (req, res) => {
 });
 
 // 获取/更新账号信息
-router.get('/account', (req, res) => {
-  res.json(db.getAccountInfo());
+router.get('/account', async (req, res) => {
+  const userId = (req as AiRequest).authUser?.id;
+  if (!userId) return res.json(defaultAccountInfo());
+  try {
+    res.json(await getUserAccountInfo(userId));
+  } catch (err) {
+    res.status(502).json({ error: (err as Error).message, code: 'CLOUD_ERROR' });
+  }
 });
 
-router.post('/account', (req, res) => {
-  const updated = db.updateAccountInfo(req.body);
-  res.json(updated);
+router.post('/account', async (req, res) => {
+  const userId = (req as AiRequest).authUser?.id;
+  if (!userId) return res.status(401).json({ error: '账号统计需登录后保存', code: 'UNAUTHORIZED' });
+  try {
+    res.json(await updateUserAccountInfo(userId, sanitizeAccountInfoPatch(req.body)));
+  } catch (err) {
+    res.status(502).json({ error: (err as Error).message, code: 'CLOUD_ERROR' });
+  }
 });
 
 // 手动触发账号数据同步
 router.post('/account/sync', async (req, res) => {
   try {
-    const result = await syncAccount();
+    const userId = (req as AiRequest).authUser?.id;
+    if (!userId) return res.status(401).json({ error: '账号统计需登录后同步', code: 'UNAUTHORIZED' });
+    const result = await syncAccount(userId);
     res.json(result);
   } catch (err: any) {
     console.error('[AI] Account sync error:', err);
@@ -231,8 +249,53 @@ router.post('/account/sync', async (req, res) => {
 });
 
 // 获取同步历史
-router.get('/account/history', (req, res) => {
-  res.json(db.getSyncHistory());
+router.get('/account/history', async (req, res) => {
+  const userId = (req as AiRequest).authUser?.id;
+  if (!userId) return res.json([]);
+  try {
+    res.json(await getUserSyncHistory(userId));
+  } catch (err) {
+    res.status(502).json({ error: (err as Error).message, code: 'CLOUD_ERROR' });
+  }
+});
+
+router.get('/account/sync-status', async (req, res) => {
+  const userId = (req as AiRequest).authUser?.id;
+  if (!userId) return res.json({ configured: false, updatedAt: 0 });
+  try { res.json(await getUserSyncStatus(userId)); }
+  catch (err) { res.status(502).json({ error: (err as Error).message, code: 'CLOUD_ERROR' }); }
+});
+
+router.get('/account/legacy-claim-status', requireAuth, async (req, res) => {
+  try {
+    const userId = (req as AiRequest).authUser?.id;
+    // 旧共享统计含站点主的 B 站 UID/粉丝数，而注册是开放的：只有最早注册的账号
+    // 能看到「可认领」，其它账号连数量也不返回。
+    if (!userId || !(await isLegacyClaimOwner(userId))) {
+      res.json({ available: false, syncHistoryCount: 0 });
+      return;
+    }
+    const claim = await getLegacyAccountAnalyticsClaimStatus();
+    const legacy = getLegacySharedAccountAnalytics();
+    const available = claim.available && legacyAnalyticsHasData() && !(await hasUserAccountAnalytics(userId));
+    res.json({ available, syncHistoryCount: available ? legacy.syncHistory.length : 0 });
+  } catch (err) {
+    res.status(502).json({ error: (err as Error).message, code: 'CLOUD_ERROR' });
+  }
+});
+
+router.post('/account/claim-legacy', requireAuth, async (req, res) => {
+  try {
+    const userId = (req as AiRequest).authUser?.id;
+    if (!userId) return res.status(401).json({ error: '未登录', code: 'UNAUTHORIZED' });
+    if (!(await isLegacyClaimOwner(userId))) {
+      return res.status(403).json({ error: '只有最早注册的账号可以认领历史共享数据', code: 'FORBIDDEN' });
+    }
+    if (await hasUserAccountAnalytics(userId)) return res.status(409).json({ error: '当前账号已有账号运营数据，不能自动合并旧共享数据', code: 'ACCOUNT_ALREADY_CONFIGURED' });
+    res.json(await claimLegacyAnalyticsForUser(userId));
+  } catch (err) {
+    res.status(502).json({ error: (err as Error).message, code: 'CLOUD_ERROR' });
+  }
 });
 
 // 素材工坊 - AI 分析素材需求
@@ -262,15 +325,21 @@ router.post('/materials/analyze', async (req, res) => {
 });
 
 // 检查 AI 配置状态（aiSource 告诉前端这次用的是账号 Key 还是站点公共 Key）
-router.get('/status', (req, res) => {
+router.get('/status', async (req, res) => {
   const authed = req as AiRequest;
-  res.json({
-    aiConfigured: hasAiKey(),
-    aiSource: authed.aiKeySource ?? (config.deepseekApiKey ? 'server' : 'none'),
-    // YouTube 数据源是站点级公共配置（用户不需要、也不该看到配置方式），这里只回状态
-    youtubeConfigured: isYouTubeConfigured(),
-    accountInfo: db.getAccountInfo(),
-  });
+  try {
+    const legacy = await getLegacyAccountAnalyticsClaimStatus().catch(() => ({ available: false, claimed: false }));
+    res.json({
+      aiConfigured: hasAiKey(),
+      aiSource: authed.aiKeySource ?? (config.deepseekApiKey ? 'server' : 'none'),
+      // YouTube 数据源是站点级公共配置（用户不需要、也不该看到配置方式），这里只回状态
+      youtubeConfigured: isYouTubeConfigured(),
+      accountInfo: authed.authUser ? await getUserAccountInfo(authed.authUser.id) : defaultAccountInfo(),
+      legacyAnalyticsAvailable: legacy.available,
+    });
+  } catch (err) {
+    res.status(502).json({ error: (err as Error).message, code: 'CLOUD_ERROR' });
+  }
 });
 
 // 重新翻译全部新闻标题（清掉旧翻译，重新生成）

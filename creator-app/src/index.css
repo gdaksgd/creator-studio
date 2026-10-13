@@ -11,13 +11,13 @@
   color-scheme: light;
 
   /* 背景与表面 */
-  --bg: #f4f6f9;
+  --bg: #f7f8fa;
   --surface: #ffffff;
   --surface-muted: #eef1f6;
   --surface-hover: #f6f8fb;
 
   /* 描边 */
-  --border: #e3e8ef;
+  --border: #e7eaf0;
   --border-strong: #cbd5e1;
 
   /* 文字三级 */
@@ -51,7 +51,7 @@
   /* 圆角外的阴影（暗色下要整体加重，所以单独命名再由 @theme 映射） */
   --elevation-xs: 0 1px 2px 0 rgb(15 23 42 / 0.05);
   --elevation-sm: 0 1px 3px 0 rgb(15 23 42 / 0.08), 0 1px 2px -1px rgb(15 23 42 / 0.06);
-  --elevation-md: 0 4px 12px -2px rgb(15 23 42 / 0.1), 0 2px 6px -2px rgb(15 23 42 / 0.06);
+  --elevation-md: 0 4px 12px -2px rgb(15 23 42 / 0.075), 0 2px 6px -2px rgb(15 23 42 / 0.04);
   --elevation-lg: 0 12px 28px -6px rgb(15 23 42 / 0.14), 0 6px 12px -6px rgb(15 23 42 / 0.08);
   --elevation-xl: 0 24px 48px -12px rgb(15 23 42 / 0.22);
 }
@@ -62,13 +62,13 @@
 .dark {
   color-scheme: dark;
 
-  --bg: #0a0e14;
-  --surface: #121822;
-  --surface-muted: #1a212c;
-  --surface-hover: #1d2531;
+  --bg: #0d1117;
+  --surface: #151b23;
+  --surface-muted: #1b232e;
+  --surface-hover: #202a36;
 
-  --border: #232c39;
-  --border-strong: #33404f;
+  --border: #293341;
+  --border-strong: #3b4858;
 
   --text: #e7ecf3;
   --text-secondary: #97a5b8;
@@ -95,9 +95,9 @@
 
   --elevation-xs: 0 1px 2px 0 rgb(0 0 0 / 0.4);
   --elevation-sm: 0 1px 3px 0 rgb(0 0 0 / 0.45);
-  --elevation-md: 0 4px 14px -2px rgb(0 0 0 / 0.5);
-  --elevation-lg: 0 12px 30px -6px rgb(0 0 0 / 0.55);
-  --elevation-xl: 0 24px 50px -12px rgb(0 0 0 / 0.65);
+  --elevation-md: 0 4px 14px -2px rgb(0 0 0 / 0.28);
+  --elevation-lg: 0 12px 30px -6px rgb(0 0 0 / 0.34);
+  --elevation-xl: 0 24px 50px -12px rgb(0 0 0 / 0.42);
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -169,7 +169,7 @@
     color: var(--text);
     font-family: var(--font-sans);
     /* 中文正文行高要比西文松，1.5 会明显偏挤 */
-    line-height: 1.65;
+    line-height: 1.58;
     letter-spacing: 0;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -299,7 +299,7 @@
   }
 
   .card-hover:hover {
-    transform: translateY(-2px);
+    transform: translateY(-1px);
     border-color: var(--border-strong);
     box-shadow: var(--shadow-card-hover);
   }

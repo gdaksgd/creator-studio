@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useTopicStore } from '../store/topicStore';
 import { useScriptStore } from '../store/scriptStore';
+import { useAssetStore } from '../store/assetStore';
 import { api } from '../api/client';
-import type { Script, MaterialPlan, SceneMaterialAnalysis, SceneMaterialCategory, MaterialRecommendation, MaterialType } from '../types';
+import type { Script, MaterialPlan, SceneMaterialAnalysis, SceneMaterialCategory, MaterialRecommendation, MaterialType, LibraryAssetType, Topic } from '../types';
 import { categoryBadge, categoryEmoji, categoryLabel } from '../config/categories';
 import { cn } from '../utils/cn';
 import { EmptyState } from '../components/ui/EmptyState';
@@ -13,6 +14,15 @@ import { Field, Select } from '../components/ui/Input';
 import { PageHeader, SectionHeading } from '../components/ui/PageHeader';
 import { LoadingBlock } from '../components/ui/Spinner';
 import { ArrowLeft, Images, Sparkles, TriangleAlert, Wand2 } from 'lucide-react';
+import { useToast } from '../components/ui/Toast';
+
+function inferLibraryType(url: string): LibraryAssetType {
+  const path = url.split('?')[0]?.toLowerCase() ?? '';
+  if (/\.(png|jpe?g|gif|webp|avif|svg)$/.test(path)) return 'image';
+  if (/\.(mp4|mov|webm|m3u8)$/.test(path) || /bilibili\.com|youtube\.com|youtu\.be|douyin\.com/.test(path)) return 'video';
+  if (/\.(mp3|wav|ogg|m4a|flac)$/.test(path)) return 'audio';
+  return 'link';
+}
 
 const MATERIAL_META: Record<MaterialType, { label: string; icon: string; color: string; bg: string; border: string; text: string }> = {
   bgm: { label: 'BGM', icon: '🎵', color: 'emerald', bg: 'bg-success-soft', border: 'border-success/30', text: 'text-success' },
@@ -39,6 +49,8 @@ const entranceDelay = (i: number) =>
 export default function Materials() {
   const { topics, loading, loadTopics, updateTopic } = useTopicStore();
   const { scripts, loadScripts } = useScriptStore();
+  const { loadAssets, addAsset, findDuplicate } = useAssetStore();
+  const toast = useToast();
   const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
   const [selectedScriptId, setSelectedScriptId] = useState<string>('');
   const [analyzing, setAnalyzing] = useState(false);
@@ -47,7 +59,8 @@ export default function Materials() {
   useEffect(() => {
     loadTopics();
     loadScripts();
-  }, [loadTopics, loadScripts]);
+    loadAssets();
+  }, [loadTopics, loadScripts, loadAssets]);
 
   const topicsWithScripts = topics.filter((t) => {
     const topicScripts = scripts.filter((s) => s.topicId === t.id);
@@ -113,6 +126,27 @@ export default function Materials() {
       }),
     };
     await updateTopic(selectedTopic.id, { materialPlan: newPlan });
+  };
+
+  const saveRecommendation = async (topic: Topic, rec: MaterialRecommendation, type: MaterialType) => {
+    const link = rec.searchLinks[0];
+    if (!link) {
+      toast.info('这条建议没有来源链接；可在素材库手动添加可用 URL。');
+      return;
+    }
+    try {
+      await addAsset({
+        title: rec.title,
+        type: inferLibraryType(link.url),
+        url: link.url,
+        category: topic.category,
+        tags: [MATERIAL_META[type].label],
+        note: [rec.description, rec.reason, `场景素材建议：${rec.source}`].filter(Boolean).join(' · '),
+      });
+      toast.success('已收藏到素材库');
+    } catch (err) {
+      toast.info((err as Error).message || '该链接已收藏');
+    }
   };
 
   // ===== 统计已选素材 =====
@@ -307,6 +341,8 @@ export default function Materials() {
           plan={selectedTopic.materialPlan}
           script={selectedScript}
           onToggle={toggleMaterial}
+          onSave={(rec, type) => saveRecommendation(selectedTopic, rec, type)}
+          isSaved={(rec, _type) => rec.searchLinks.some((link) => !!findDuplicate(link.url, inferLibraryType(link.url)))}
         />
       )}
 
@@ -333,10 +369,14 @@ function MaterialPlanView({
   plan,
   script,
   onToggle,
+  onSave,
+  isSaved,
 }: {
   plan: MaterialPlan;
   script: Script;
   onToggle: (sceneNumber: number, materialType: MaterialType, recIndex: number) => void;
+  onSave: (rec: MaterialRecommendation, type: MaterialType) => void;
+  isSaved: (rec: MaterialRecommendation, type: MaterialType) => boolean;
 }) {
   // 将AI分析的场景与实际分镜对应
   const storyboards = script.storyboards;
@@ -363,6 +403,8 @@ function MaterialPlanView({
               scene={scene}
               duration={storyboard?.duration}
               onToggle={onToggle}
+              onSave={onSave}
+              isSaved={isSaved}
             />
           );
         })}
@@ -386,10 +428,14 @@ function SceneCard({
   scene,
   duration,
   onToggle,
+  onSave,
+  isSaved,
 }: {
   scene: SceneMaterialAnalysis;
   duration?: number;
   onToggle: (sceneNumber: number, materialType: MaterialType, recIndex: number) => void;
+  onSave: (rec: MaterialRecommendation, type: MaterialType) => void;
+  isSaved: (rec: MaterialRecommendation, type: MaterialType) => boolean;
 }) {
   return (
     <div className="card overflow-hidden">
@@ -433,6 +479,8 @@ function SceneCard({
               category={category}
               sceneNumber={scene.sceneNumber}
               onToggle={onToggle}
+              onSave={onSave}
+              isSaved={isSaved}
             />
           );
         })}
@@ -447,11 +495,15 @@ function MaterialCategorySection({
   category,
   sceneNumber,
   onToggle,
+  onSave,
+  isSaved,
 }: {
   type: MaterialType;
   category: SceneMaterialCategory;
   sceneNumber: number;
   onToggle: (sceneNumber: number, materialType: MaterialType, recIndex: number) => void;
+  onSave: (rec: MaterialRecommendation, type: MaterialType) => void;
+  isSaved: (rec: MaterialRecommendation, type: MaterialType) => boolean;
 }) {
   const meta = MATERIAL_META[type];
   return (
@@ -482,6 +534,8 @@ function MaterialCategorySection({
             meta={meta}
             selected={rec.selected}
             onToggle={() => onToggle(sceneNumber, type, originalIndex)}
+            onSave={() => onSave(rec, type)}
+            isSaved={isSaved(rec, type)}
           />
         ))}
       </div>
@@ -495,11 +549,15 @@ function RecommendationCard({
   meta,
   selected,
   onToggle,
+  onSave,
+  isSaved,
 }: {
   rec: MaterialRecommendation;
   meta: typeof MATERIAL_META[MaterialType];
   selected: boolean;
   onToggle: () => void;
+  onSave: () => void;
+  isSaved: boolean;
 }) {
   const isOfficial = rec.isOfficial === true;
   const animeSrc = rec.animeSource;
@@ -563,6 +621,7 @@ function RecommendationCard({
 
       {/* 搜索链接 */}
       <div className="flex flex-wrap gap-1.5">
+        <Button type="button" variant={isSaved ? 'soft' : 'ghost'} size="xs" disabled={isSaved} onClick={onSave}>{isSaved ? '已收藏' : '收藏到素材库'}</Button>
         {rec.searchLinks.map((link, i) => (
           <a
             key={i}

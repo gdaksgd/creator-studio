@@ -1,7 +1,7 @@
-import { useEffect, useState, type ReactNode } from 'react';
-import { Cloud, Database, KeyRound, LogIn, LogOut, RefreshCw, ShieldCheck, Trash2, TriangleAlert, UserRound } from 'lucide-react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Cloud, Database, Download, KeyRound, LogIn, LogOut, RefreshCw, ShieldCheck, Trash2, TriangleAlert, Upload, UserRound } from 'lucide-react';
 import { api, ApiError, type AccountInfo, type AiKeySource } from '../api/client';
-import { manualSync } from '../services/syncService';
+import { manualSync, scheduleSyncUpload } from '../services/syncService';
 import { useAuthStore } from '../services/authService';
 import { useToast } from '../components/ui/Toast';
 import {
@@ -16,6 +16,18 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { Field, Input } from '../components/ui/Input';
+import { Modal } from '../components/ui/Modal';
+import { ConfirmDialog } from '../components/ui/ConfirmDialog';
+import { db } from '../db';
+import { useTopicStore } from '../store/topicStore';
+import { useScriptStore } from '../store/scriptStore';
+import {
+  createLocalBackup,
+  downloadLocalBackup,
+  inspectLocalBackup,
+  restoreLocalBackup,
+  type BackupPreview,
+} from '../services/localBackup';
 
 /** 时间戳 → 本地时间（账号卡片里的「云端更新时间」） */
 function formatLocalTime(ts?: number): string {
@@ -84,6 +96,13 @@ export default function Settings() {
   const [demoCount, setDemoCount] = useState(0);
   const [demoState, setDemoState] = useState<DemoState>('auto');
   const [demoMessage, setDemoMessage] = useState('');
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [backupPreview, setBackupPreview] = useState<BackupPreview | null>(null);
+  const [backupError, setBackupError] = useState('');
+  const [localRecordCounts, setLocalRecordCounts] = useState({ topics: 0, scripts: 0, assets: 0 });
+  const [replaceConfirmOpen, setReplaceConfirmOpen] = useState(false);
+  const [replacePending, setReplacePending] = useState(false);
+  const backupInputRef = useRef<HTMLInputElement>(null);
   const [form, setForm] = useState<AccountInfo>({
     bilibiliFollowers: 0,
     bilibiliAvgViews: 0,
@@ -102,6 +121,8 @@ export default function Settings() {
     douyinTotalLikes: 0,
     syncMessage: '',
   });
+  const [legacyAnalyticsAvailable, setLegacyAnalyticsAvailable] = useState(false);
+  const [claimingLegacyAnalytics, setClaimingLegacyAnalytics] = useState(false);
 
   const authUser = useAuthStore((s) => s.user);
   const authToken = useAuthStore((s) => s.token);
@@ -167,11 +188,30 @@ export default function Settings() {
 
   useEffect(() => {
     // AI / YouTube 状态由下面那个 effect 统一取（它依赖 authToken，挂载时也会跑），这里只取账号信息
-    api.getStatus().then((data) => setForm(data.accountInfo)).catch(console.error);
-    api.getSyncStatus().then((data) => setSyncStatus(data.syncConfigured)).catch(() => setSyncStatus(false));
+    if (authToken) api.getAccount().then(setForm).catch(console.error);
+    api.getAccountSyncStatus().then((data) => setSyncStatus(data.configured)).catch(() => setSyncStatus(false));
+    if (authToken) api.getLegacyAnalyticsClaimStatus().then((data) => setLegacyAnalyticsAvailable(data.available)).catch(() => setLegacyAnalyticsAvailable(false));
     countDemoData().then(setDemoCount).catch(() => setDemoCount(0));
+      Promise.all([db.topics.count(), db.scripts.count(), db.assets.count()])
+      .then(([topics, scripts, assets]) => setLocalRecordCounts({ topics, scripts, assets }))
+      .catch(() => setLocalRecordCounts({ topics: 0, scripts: 0, assets: 0 }));
     setDemoState(getDemoState());
   }, []);
+
+  useEffect(() => {
+    if (!authToken) {
+      setLegacyAnalyticsAvailable(false);
+      setForm({
+        bilibiliFollowers: 0, bilibiliAvgViews: 0, douyinFollowers: 0, douyinAvgViews: 0,
+        contentFocus: '卡牌游戏 + 恐怖游戏', daysActive: 0, totalVideos: 0,
+        bilibiliUid: '', douyinId: '', lastSyncAt: 0, bilibiliName: '', bilibiliTotalLikes: 0,
+        douyinName: '', douyinTotalVideos: 0, douyinTotalLikes: 0, syncMessage: '',
+      });
+      return;
+    }
+    api.getAccount().then(setForm).catch(console.error);
+    api.getLegacyAnalyticsClaimStatus().then((data) => setLegacyAnalyticsAvailable(data.available)).catch(() => setLegacyAnalyticsAvailable(false));
+  }, [authToken]);
 
   // AI 配置跟着账号切换：登录后读自己账号里的 Key（只回掩码），退出后回到「站点公共配置」
   useEffect(() => {
@@ -254,7 +294,85 @@ export default function Settings() {
     }
   };
 
+  const handleClaimLegacyAnalytics = async () => {
+    setClaimingLegacyAnalytics(true);
+    try {
+      const result = await api.claimLegacyAnalytics();
+      await Promise.all([
+        api.getAccount().then(setForm),
+        api.getSyncHistory(),
+        api.authMe().then(() => useAuthStore.getState().refreshMe()),
+      ]);
+      setLegacyAnalyticsAvailable(false);
+      toast.success(result.claimed ? '旧账号运营数据已认领到当前账号' : '旧数据已被认领或没有可迁移的共享数据');
+    } catch (error) {
+      // 403（不是最早注册的账号）/ 400 这类确定性失败：把卡片收起来，
+      // 否则「检测到旧版共享账号统计数据」会一直挂着，重试还是同一个错。
+      const code = (error as { code?: string }).code;
+      if (code === 'FORBIDDEN' || code === 'BAD_REQUEST') setLegacyAnalyticsAvailable(false);
+      toast.error(`认领旧账号数据失败：${(error as Error).message}`);
+    } finally {
+      setClaimingLegacyAnalytics(false);
+    }
+  };
+
+  const handleExportBackup = async () => {
+    setBackupBusy(true);
+    try {
+      const backup = await createLocalBackup();
+      downloadLocalBackup(backup);
+      toast.success(`备份已导出：${backup.topics.length} 个选题、${backup.scripts.length} 个脚本`);
+    } catch (err) {
+      toast.error('备份导出失败：' + (err as Error).message);
+    } finally {
+      setBackupBusy(false);
+    }
+  };
+
+  const handleBackupFile = async (file?: File) => {
+    if (!file) return;
+    setBackupError('');
+    setBackupBusy(true);
+    try {
+      const [localTopics, localScripts, localAssets] = await Promise.all([db.topics.count(), db.scripts.count(), db.assets.count()]);
+      setLocalRecordCounts({ topics: localTopics, scripts: localScripts, assets: localAssets });
+      setBackupPreview(await inspectLocalBackup(file));
+    } catch (err) {
+      setBackupError((err as Error).message || '无法读取备份');
+    } finally {
+      setBackupBusy(false);
+      if (backupInputRef.current) backupInputRef.current.value = '';
+    }
+  };
+
+  const finishBackupRestore = async (mode: 'replace' | 'merge') => {
+    if (!backupPreview) return;
+    setReplacePending(true);
+    try {
+      const result = await restoreLocalBackup(backupPreview.backup, mode);
+      await Promise.all([useTopicStore.getState().loadTopics(), useScriptStore.getState().loadScripts()]);
+      const [topics, scripts, assets] = await Promise.all([db.topics.count(), db.scripts.count(), db.assets.count()]);
+      setLocalRecordCounts({ topics, scripts, assets });
+      await refreshDemoCount();
+      scheduleSyncUpload();
+      setBackupPreview(null);
+      setReplaceConfirmOpen(false);
+      toast.success(mode === 'replace'
+        ? `本机数据已由备份恢复（${result.topicCount} 个选题、${result.scriptCount} 个脚本）`
+        : `已合并 ${result.topicCount} 个新选题、${result.scriptCount} 个新脚本；同 ID 的本机记录保持不变`);
+    } catch (err) {
+      setBackupError('恢复失败：' + (err as Error).message);
+      toast.error('备份恢复失败：' + (err as Error).message);
+    } finally {
+      setReplacePending(false);
+    }
+  };
+
   const handleSave = async () => {
+    if (!authToken) {
+      toast.info('账号运营数据现在按账号隔离；请先登录后保存账号绑定信息');
+      return;
+    }
     setSaving(true);
     setSaved(false);
     try {
@@ -410,6 +528,11 @@ export default function Settings() {
                   <Cloud className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                   <span>一次登录，本机与云端保持一致；演示数据不会进入云端。</span>
                 </p>
+                {legacyAnalyticsAvailable && <div className="rounded-xl border border-warning/30 bg-warning-soft p-3">
+                  <p className="text-xs font-medium text-warning">检测到旧版共享账号统计数据</p>
+                  <p className="mt-1 text-[11px] leading-relaxed text-warning">这些旧数据不再公开展示。若确认属于当前账号，可一次性认领；认领后其他账号不能再认领。</p>
+                  <Button className="mt-2" variant="secondary" size="sm" loading={claimingLegacyAnalytics} onClick={() => void handleClaimLegacyAnalytics()}>认领旧账号统计</Button>
+                </div>}
               </div>
             </div>
           ) : (
@@ -506,18 +629,20 @@ export default function Settings() {
           <Card padding="lg" className="anim-rise flex flex-col">
             <SectionHeading
               title="账号绑定"
-              hint="填写后每天自动同步账号数据"
+              hint={authToken ? '账号绑定与统计数据按登录账号保存' : '登录后填写并保存个人平台账号'}
               action={
                 <a href="/analytics" className="shrink-0 text-xs text-primary hover:underline">
                   查看数据看板 →
                 </a>
               }
             />
+            {!authToken && <p className="mt-4 rounded-lg border border-info/30 bg-info-soft px-3 py-2 text-xs leading-relaxed text-info">未登录状态下账号运营数据不会写入共享服务器；请登录后再配置，以确保数据只属于你的账号。</p>}
             <div className="mt-4 grid gap-4 sm:grid-cols-2">
               <Field label="B站 UID" hint={form.bilibiliName ? `✓ ${form.bilibiliName}` : undefined}>
                 <Input
                   type="text"
-                  value={form.bilibiliUid || ''}
+                  value={authToken ? form.bilibiliUid || '' : ''}
+                  disabled={!authToken}
                   onChange={(e) => setForm({ ...form, bilibiliUid: e.target.value })}
                   placeholder="例如: 289518100"
                 />
@@ -525,7 +650,8 @@ export default function Settings() {
               <Field label="抖音号" hint={form.douyinName ? `✓ ${form.douyinName}` : undefined}>
                 <Input
                   type="text"
-                  value={form.douyinId || ''}
+                  value={authToken ? form.douyinId || '' : ''}
+                  disabled={!authToken}
                   onChange={(e) => setForm({ ...form, douyinId: e.target.value })}
                   placeholder="例如: zgbwngbd"
                 />
@@ -533,20 +659,22 @@ export default function Settings() {
               <Field label="内容方向">
                 <Input
                   type="text"
-                  value={form.contentFocus}
+                  value={authToken ? form.contentFocus : ''}
+                  disabled={!authToken}
                   onChange={(e) => setForm({ ...form, contentFocus: e.target.value })}
                 />
               </Field>
               <Field label="活跃天数">
                 <Input
                   type="number"
-                  value={form.daysActive}
+                  value={authToken ? form.daysActive : ''}
+                  disabled={!authToken}
                   onChange={(e) => setForm({ ...form, daysActive: Number(e.target.value) })}
                 />
               </Field>
             </div>
             <div className="mt-auto flex flex-wrap items-center gap-3 border-t border-border pt-4">
-              <Button variant="primary" size="sm" loading={saving} onClick={handleSave}>
+              <Button variant="primary" size="sm" loading={saving} disabled={!authToken} onClick={handleSave}>
                 保存配置
               </Button>
               {saved && <Badge variant="success">✓ 已保存</Badge>}
@@ -749,7 +877,89 @@ export default function Settings() {
             </div>
           </Card>
         </div>
+        <Card padding="lg" className="mt-5 anim-rise">
+          <SectionHeading
+            title="本地备份与恢复"
+            hint="备份仅保存在你选择的下载位置，不会上传到服务器"
+            action={<Badge variant="neutral">JSON · v1</Badge>}
+          />
+            <p className="mt-3 max-w-3xl text-xs leading-relaxed text-text-muted">
+            导出包含选题、评估、发布记录、脚本、分镜、平台检查输入和素材收藏。恢复前会先校验文件并显示内容预览；可以只补入本机缺少的记录，也可以明确选择用备份替换本机创作数据。演示数据也属于本机数据，会按同样规则备份。
+          </p>
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <Button variant="primary" size="sm" loading={backupBusy} onClick={() => void handleExportBackup()}>
+              <Download className="h-3.5 w-3.5" aria-hidden="true" />导出 JSON 备份
+            </Button>
+            <Button variant="secondary" size="sm" disabled={backupBusy} onClick={() => backupInputRef.current?.click()}>
+              <Upload className="h-3.5 w-3.5" aria-hidden="true" />选择备份并预览
+            </Button>
+            <input
+              ref={backupInputRef}
+              type="file"
+              accept="application/json,.json"
+              className="sr-only"
+              aria-label="选择 Creator Studio JSON 备份文件"
+              onChange={(event) => void handleBackupFile(event.target.files?.[0])}
+            />
+            <span className="text-xs text-text-muted">本机当前：{localRecordCounts.topics} 个选题 · {localRecordCounts.scripts} 个脚本 · {localRecordCounts.assets} 个素材</span>
+          </div>
+          {backupError && <p role="alert" className="mt-3 rounded-lg border border-danger/30 bg-danger-soft px-3 py-2 text-xs text-danger">{backupError}</p>}
+          <p className="mt-3 flex items-start gap-1.5 text-[11px] leading-relaxed text-text-muted">
+            <ShieldCheck className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <span>备份不会包含登录密码、账号令牌或 AI Key。建议定期下载备份，并保存到安全位置。</span>
+          </p>
+        </Card>
       </section>
+
+      <Modal
+        open={!!backupPreview}
+        onClose={() => { if (!replacePending) { setBackupPreview(null); setBackupError(''); } }}
+        size="md"
+        title="备份文件预览"
+        description={backupPreview ? `创建于 ${formatLocalTime(backupPreview.exportedAt)} · 版本 ${backupPreview.backup.version}` : undefined}
+        footer={backupPreview ? <>
+          <Button variant="ghost" size="sm" disabled={replacePending} onClick={() => setBackupPreview(null)}>取消</Button>
+          <Button variant="secondary" size="sm" loading={replacePending} disabled={backupPreview.topicCount + backupPreview.scriptCount === 0} onClick={() => void finishBackupRestore('merge')}>仅合并新记录</Button>
+          <Button variant="danger" size="sm" disabled={replacePending} onClick={() => setReplaceConfirmOpen(true)}>替换本机数据…</Button>
+        </> : undefined}
+      >
+        {backupPreview && <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {[
+              { label: '选题', value: backupPreview.topicCount },
+              { label: '脚本', value: backupPreview.scriptCount },
+              { label: '分镜', value: backupPreview.storyboardCount },
+              { label: '演示记录', value: backupPreview.demoCount },
+              { label: '素材收藏', value: backupPreview.assetCount },
+              { label: '内容实验', value: backupPreview.experimentCount },
+              { label: '营销简报', value: backupPreview.briefCount },
+              { label: '素材收藏关系', value: backupPreview.favoriteCount },
+              { label: '简报附件关联', value: backupPreview.attachmentCount },
+            ].map((item) => <div key={item.label} className="rounded-xl border border-border bg-surface-muted/50 p-3 text-center"><div className="num text-xl font-semibold text-text">{item.value}</div><div className="text-[11px] text-text-muted">{item.label}</div></div>)}
+          </div>
+          <div className="rounded-xl border border-border bg-surface-muted/40 p-3.5 text-xs leading-relaxed text-text-secondary">
+            <p>本机现有：{localRecordCounts.topics} 个选题 · {localRecordCounts.scripts} 个脚本 · {localRecordCounts.assets} 个素材</p>
+            <p className="mt-1">缺少关联选题的脚本：{backupPreview.orphanScriptCount} 个</p>
+          </div>
+          {backupPreview.warnings.length > 0 && <div className="space-y-1 rounded-xl border border-warning/30 bg-warning-soft p-3 text-xs leading-relaxed text-warning">{backupPreview.warnings.map((warning) => <p key={warning}>{warning}</p>)}</div>}
+          {backupError && <p role="alert" className="rounded-lg border border-danger/30 bg-danger-soft px-3 py-2 text-xs text-danger">{backupError}</p>}
+          <div className="rounded-xl border border-info/30 bg-info-soft p-3 text-xs leading-relaxed text-info">
+            <p className="font-semibold">合并与替换的区别</p>
+            <p className="mt-1">合并：只添加本机没有的 ID；同 ID 的本机记录保留，不会被备份覆盖。</p>
+            <p className="mt-1">替换：清空本机当前选题、脚本与素材后写入此备份；其它浏览器设置、账号信息不变。</p>
+          </div>
+        </div>}
+      </Modal>
+
+      <ConfirmDialog
+        open={replaceConfirmOpen}
+        title="用备份替换本机创作数据？"
+        description={`将清空本机的 ${localRecordCounts.topics} 个选题、${localRecordCounts.scripts} 个脚本和 ${localRecordCounts.assets} 个素材，再恢复备份内容。此操作会覆盖本机创作数据。`}
+        confirmLabel="确认替换并恢复"
+        pending={replacePending}
+        onConfirm={() => void finishBackupRestore('replace')}
+        onClose={() => { if (!replacePending) setReplaceConfirmOpen(false); }}
+      />
     </div>
   );
 }

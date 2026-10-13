@@ -1,6 +1,6 @@
 import crypto from 'crypto';
-import { db } from '../db.js';
 import type { AccountInfo, SyncResult, SyncHistoryEntry } from '../types.js';
+import { addUserSyncHistory, getUserAccountInfo, updateUserAccountInfo } from './userAnalyticsStore.js';
 
 // ─── WBI Signing (shared with bilibiliCollector) ──────────
 
@@ -181,8 +181,8 @@ async function syncDouyin(douyinId: string): Promise<{ data: { name: string; fol
 
 // ─── Main Sync Function ───────────────────────────────────
 
-export async function syncAccount(): Promise<SyncResult> {
-  const account = db.getAccountInfo();
+export async function syncAccount(userId: string): Promise<SyncResult> {
+  const account = await getUserAccountInfo(userId);
   const syncedFields: string[] = [];
   const failedFields: string[] = [];
   const messages: string[] = [];
@@ -207,7 +207,7 @@ export async function syncAccount(): Promise<SyncResult> {
       }
 
       syncedFields.push('B站粉丝数', 'B站账号名', 'B站总点赞', '已发布视频数');
-      db.updateAccountInfo(updates);
+      await updateUserAccountInfo(userId, updates);
 
       messages.push(`B站: ${biliResult.data.name} | 粉丝 ${biliResult.data.followers} | 视频 ${biliResult.data.totalVideos} | 赞 ${biliResult.data.totalLikes}${biliResult.data.avgViews > 0 ? ` | 均播 ${biliResult.data.avgViews}` : ''}`);
 
@@ -228,7 +228,7 @@ export async function syncAccount(): Promise<SyncResult> {
     const dyResult = await syncDouyin(account.douyinId.trim());
 
     if (dyResult.data) {
-      db.updateAccountInfo({
+      await updateUserAccountInfo(userId, {
         douyinFollowers: dyResult.data.followers,
         douyinName: dyResult.data.name,
       });
@@ -244,8 +244,8 @@ export async function syncAccount(): Promise<SyncResult> {
 
   // 更新同步时间
   const now = Date.now();
-  const finalAccount = db.getAccountInfo();
-  db.updateAccountInfo({
+  const finalAccount = await getUserAccountInfo(userId);
+  await updateUserAccountInfo(userId, {
     lastSyncAt: now,
     syncMessage: messages.join(' | '),
   });
@@ -262,7 +262,7 @@ export async function syncAccount(): Promise<SyncResult> {
     douyinTotalLikes: finalAccount.douyinTotalLikes || 0,
     douyinVideos: finalAccount.douyinTotalVideos || 0,
   };
-  db.addSyncHistory(historyEntry);
+  await addUserSyncHistory(userId, historyEntry);
 
   const success = syncedFields.length > 0;
   console.log(`[AccountSync] Done. Synced: ${syncedFields.length} fields, Failed: ${failedFields.length}`);
@@ -272,6 +272,6 @@ export async function syncAccount(): Promise<SyncResult> {
     message: messages.join(' | '),
     syncedFields,
     failedFields,
-    accountInfo: db.getAccountInfo(),
+    accountInfo: await getUserAccountInfo(userId),
   };
 }

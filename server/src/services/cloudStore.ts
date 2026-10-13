@@ -34,9 +34,22 @@ export interface CloudAiConfig {
 export interface CloudAccountData {
   topics: unknown[];
   scripts: unknown[];
+  assets?: unknown[];
+  materialFavorites?: unknown[];
+  briefAttachments?: unknown[];
+  marketingWorkbench?: { experiments: unknown[]; briefs: unknown[] };
   uploadedAt: number;
+  /**
+   * 账号统计/同步历史的更新时间。**与 uploadedAt 严格分开**：uploadedAt 是内容同步的
+   * 版本号（乐观锁 + 前端「云端是否比本地新」的判据），分析写入绝不能碰它，
+   * 否则从未上传过内容的账号会变成「云端有新内容」而被前端清空本地数据。
+   */
+  analyticsUpdatedAt?: number;
   /** 该账号自己的 AI 配置；缺省表示用站点公共配置 */
   ai?: CloudAiConfig;
+  /** Per-user platform account analytics; never stored in the former shared db.json slot. */
+  accountInfo?: Record<string, unknown>;
+  syncHistory?: unknown[];
 }
 
 /** 账号记录（口令只存 scrypt 摘要） */
@@ -61,6 +74,7 @@ export interface CloudBlob {
   users: CloudUserRecord[];
   accounts: Record<string, CloudAccountData>;
   legacy?: CloudLegacyData;
+  legacyAccountAnalyticsClaimedBy?: string;
 }
 
 export interface CloudSnapshot {
@@ -135,10 +149,26 @@ function normalizeAccount(raw: unknown): CloudAccountData {
     topics: asArray(record.topics),
     scripts: asArray(record.scripts),
     uploadedAt: asNumber(record.uploadedAt, 0),
+    ...(Array.isArray(record.assets) ? { assets: record.assets } : {}),
+    ...(Array.isArray(record.materialFavorites) ? { materialFavorites: record.materialFavorites } : {}),
+    ...(Array.isArray(record.briefAttachments) ? { briefAttachments: record.briefAttachments } : {}),
+    ...(record.marketingWorkbench && typeof record.marketingWorkbench === 'object' && !Array.isArray(record.marketingWorkbench) ? { marketingWorkbench: {
+      experiments: Array.isArray((record.marketingWorkbench as Record<string, unknown>).experiments) ? (record.marketingWorkbench as Record<string, unknown>).experiments as unknown[] : [],
+      briefs: Array.isArray((record.marketingWorkbench as Record<string, unknown>).briefs) ? (record.marketingWorkbench as Record<string, unknown>).briefs as unknown[] : [],
+    } } : {}),
+    ...(Array.isArray(record.experiments) ? { experiments: record.experiments } : {}),
+    ...(Array.isArray(record.briefs) ? { briefs: record.briefs } : {}),
   };
   // AI 配置必须原样透传：读-改-写整份 blob 时漏掉它会把账号里的 Key 悄悄抹掉
   const ai = normalizeAiConfig(record.ai);
   if (ai) account.ai = ai;
+  if (record.accountInfo && typeof record.accountInfo === 'object' && !Array.isArray(record.accountInfo)) {
+    account.accountInfo = record.accountInfo as Record<string, unknown>;
+  }
+  if (Array.isArray(record.syncHistory)) account.syncHistory = record.syncHistory;
+  // 同样要透传：它记录账号统计的更新时间，漏掉会在读-改-写时被抹平
+  const analyticsUpdatedAt = asNumber(record.analyticsUpdatedAt, 0);
+  if (analyticsUpdatedAt > 0) account.analyticsUpdatedAt = analyticsUpdatedAt;
   return account;
 }
 
@@ -153,6 +183,7 @@ export function normalizeBlob(raw: unknown): CloudBlob {
         .map(normalizeUser)
         .filter((user): user is CloudUserRecord => user !== null),
       accounts: {},
+      ...(typeof record.legacyAccountAnalyticsClaimedBy === 'string' ? { legacyAccountAnalyticsClaimedBy: record.legacyAccountAnalyticsClaimedBy } : {}),
     };
     const rawAccounts = record.accounts;
     if (rawAccounts && typeof rawAccounts === 'object') {
@@ -168,6 +199,15 @@ export function normalizeBlob(raw: unknown): CloudBlob {
         scripts: asArray(legacy.scripts),
         uploadedAt: asNumber(legacy.uploadedAt, 0),
       };
+    }
+    // Rolling upgrade from v2 without an analytics owner: if at most one
+    // account exists, bind its former embedded analytics exactly to that account.
+    if (!blob.legacyAccountAnalyticsClaimedBy && blob.users.length === 1) {
+      const onlyUser = blob.users[0]!;
+      const onlyAccount = blob.accounts[onlyUser.id];
+      if (onlyAccount?.accountInfo || onlyAccount?.syncHistory?.length) {
+        blob.legacyAccountAnalyticsClaimedBy = onlyUser.id;
+      }
     }
     return blob;
   }
@@ -246,4 +286,33 @@ export function updateCloud<T>(mutator: (blob: CloudBlob) => T | Promise<T>): Pr
     () => undefined
   );
   return run;
+}
+
+/** Seed legacy shared analytics for exactly one explicitly authenticated user. */
+export function claimLegacyAccountAnalytics<T>(userId: string, legacy: {
+  accountInfo: Record<string, unknown>;
+  syncHistory: unknown[];
+}): Promise<{ claimed: boolean; value?: T }> {
+  return updateCloud((blob) => {
+    if (blob.legacyAccountAnalyticsClaimedBy) return { claimed: false };
+    const account = normalizeAccount(blob.accounts[userId]);
+    const existing = account.accountInfo;
+    const existingHasValues = !!existing && !!(
+      existing.bilibiliUid || existing.douyinId || existing.lastSyncAt || existing.bilibiliFollowers ||
+      existing.bilibiliAvgViews || existing.douyinFollowers || existing.douyinAvgViews || existing.totalVideos ||
+      existing.bilibiliTotalLikes || existing.douyinTotalLikes
+    );
+    const legacyHasValues = Object.values(legacy.accountInfo).some((value) => value !== '' && value !== 0 && value !== null && value !== undefined);
+    if (!legacyHasValues || existingHasValues) return { claimed: false, value: existing as T | undefined };
+    account.accountInfo = legacy.accountInfo;
+    account.syncHistory = legacy.syncHistory;
+    blob.accounts[userId] = account;
+    blob.legacyAccountAnalyticsClaimedBy = userId;
+    return { claimed: true, value: legacy.accountInfo as T };
+  });
+}
+
+export async function getLegacyAccountAnalyticsClaimStatus(): Promise<{ available: boolean; claimed: boolean }> {
+  const { blob } = await readCloud();
+  return { available: !blob.legacyAccountAnalyticsClaimedBy, claimed: !!blob.legacyAccountAnalyticsClaimedBy };
 }

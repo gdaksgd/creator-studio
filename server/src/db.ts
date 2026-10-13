@@ -8,6 +8,9 @@ interface DBShape {
   accountInfo: AccountInfo;
   lastCollected: number | null;
   syncHistory: SyncHistoryEntry[];
+  /** Preserved local-only snapshot from the former shared account store; never served by API. */
+  legacySharedAccountInfo?: AccountInfo;
+  legacySharedSyncHistory?: SyncHistoryEntry[];
 }
 
 const DB_PATH = path.join(config.dataDir, 'db.json');
@@ -35,6 +38,28 @@ const defaultDB: DBShape = {
   lastCollected: null,
   syncHistory: [],
 };
+
+export function defaultAccountInfo(): AccountInfo {
+  return { ...defaultDB.accountInfo };
+}
+
+/**
+ * 判断一份 accountInfo 是否真的「有内容」——逐字段与默认值比对，而不是只挑几个
+ * 手写字段。漏字段会让只填了这些字段的旧共享统计不被搬进 legacy 槽，
+ * `/api/ai/account/legacy-claim-status` 就永远报 available:false，用户拿不回数据。
+ * contentFocus 的默认值本身非空，不能当「有数据」的证据，故跳过。
+ */
+export function hasMeaningfulAccountInfo(raw: unknown): boolean {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+  const row = raw as Record<string, unknown>;
+  const defaults = defaultDB.accountInfo as unknown as Record<string, unknown>;
+  return Object.keys(defaults).some((key) => {
+    if (key === 'contentFocus') return false;
+    const value = row[key];
+    if (value === undefined || value === null) return false;
+    return value !== defaults[key];
+  });
+}
 
 function ensureDB(): void {
   if (!fs.existsSync(config.dataDir)) {
@@ -82,7 +107,29 @@ function readDB(): DBShape {
   ensureDB();
   try {
     const raw = fs.readFileSync(DB_PATH, 'utf-8');
-    return { ...defaultDB, ...JSON.parse(raw) };
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const data = { ...defaultDB, ...parsed } as DBShape;
+    // Before account isolation, accountInfo/history were global server state.
+    // Preserve a local recovery copy, move them under an explicitly named legacy
+    // field, and reset the active shared slot so no anonymous endpoint can expose it.
+    const hasSharedAccount = hasMeaningfulAccountInfo(parsed.accountInfo);
+    const hasSharedHistory = Array.isArray(parsed.syncHistory) && parsed.syncHistory.length > 0;
+    if ((hasSharedAccount || hasSharedHistory) && !data.legacySharedAccountInfo && !data.legacySharedSyncHistory) {
+      const backupPath = `${DB_PATH}.legacy-account-backup`;
+      try {
+        if (!fs.existsSync(backupPath)) fs.copyFileSync(DB_PATH, backupPath);
+      } catch (backupErr) {
+        // Do not discard the old fields if the recovery copy could not be made.
+        console.error('[db] shared account backup failed; keeping legacy data in-place:', backupErr);
+        return data;
+      }
+      data.legacySharedAccountInfo = data.accountInfo;
+      data.legacySharedSyncHistory = data.syncHistory;
+      data.accountInfo = defaultAccountInfo();
+      data.syncHistory = [];
+      writeDB(data);
+    }
+    return data;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[db] readDB failed, falling back to defaults. ${DB_PATH}: ${message}`);
@@ -105,6 +152,24 @@ function readDB(): DBShape {
 function writeDB(data: DBShape): void {
   ensureDB();
   atomicWriteFile(DB_PATH, JSON.stringify(data, null, 2));
+}
+
+export function migrateSharedAnalyticsToUserInfo(info: AccountInfo, history: SyncHistoryEntry[]): void {
+  const data = readDB();
+  data.legacySharedAccountInfo = info;
+  data.legacySharedSyncHistory = history;
+  data.accountInfo = defaultAccountInfo();
+  data.syncHistory = [];
+  writeDB(data);
+}
+
+/** Historic shared account slot, available only to the one-time authenticated claim path. */
+export function getLegacySharedAccountAnalytics(): { accountInfo: AccountInfo; syncHistory: SyncHistoryEntry[] } {
+  const data = readDB();
+  return {
+    accountInfo: data.legacySharedAccountInfo ?? defaultAccountInfo(),
+    syncHistory: data.legacySharedSyncHistory ?? [],
+  };
 }
 
 export const db = {
@@ -136,17 +201,6 @@ export const db = {
     writeDB(data);
   },
 
-  getAccountInfo(): AccountInfo {
-    return readDB().accountInfo;
-  },
-
-  updateAccountInfo(info: Partial<AccountInfo>): AccountInfo {
-    const data = readDB();
-    data.accountInfo = { ...data.accountInfo, ...info };
-    writeDB(data);
-    return data.accountInfo;
-  },
-
   setLastCollected(ts: number): void {
     const data = readDB();
     data.lastCollected = ts;
@@ -176,17 +230,4 @@ export const db = {
     return readDB().lastCollected;
   },
 
-  getSyncHistory(): SyncHistoryEntry[] {
-    return readDB().syncHistory.slice(-90); // Last 90 entries
-  },
-
-  addSyncHistory(entry: SyncHistoryEntry): void {
-    const data = readDB();
-    data.syncHistory.push(entry);
-    // Keep last 90 entries
-    if (data.syncHistory.length > 90) {
-      data.syncHistory = data.syncHistory.slice(-90);
-    }
-    writeDB(data);
-  },
 };

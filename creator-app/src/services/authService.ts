@@ -12,6 +12,11 @@ import { api, ApiError, setAuthToken, AUTH_TOKEN_KEY } from '../api/client';
 import type { AuthUser, CloudUsage } from '../api/client';
 import { clearDemoData } from './demoData';
 import { syncOnLaunch } from './syncService';
+import { db } from '../db';
+import { useTopicStore } from '../store/topicStore';
+import { useScriptStore } from '../store/scriptStore';
+import { useMarketingStore } from '../store/marketingStore';
+import { useAssetStore } from '../store/assetStore';
 
 /**
  * 同步判断「当前有没有登录」用（读 localStorage 即可，不依赖 React）。
@@ -70,11 +75,38 @@ export interface AuthState {
 }
 
 /** 登录/注册成功后的固定流程（每一步失败都只降级、不把登录判成失败） */
-async function afterAuthSuccess(): Promise<void> {
+async function alignLocalDataOwner(userId: string): Promise<void> {
+  const ownerKey = 'creator-studio-local-data-owner';
+  let previousUserId: string | null = null;
+  try { previousUserId = localStorage.getItem(ownerKey); } catch { /* use in-memory local store */ }
+  if (previousUserId && previousUserId !== userId) {
+      await db.transaction('rw', [db.topics, db.scripts, db.assets, db.marketingWorkbench, db.materialFavorites, db.briefAttachments], async () => {
+        await db.topics.clear();
+        await db.scripts.clear();
+        await db.assets.clear();
+        await db.marketingWorkbench.clear();
+        await db.materialFavorites.clear();
+        await db.briefAttachments.clear();
+      });
+    await Promise.all([useTopicStore.getState().loadTopics(), useScriptStore.getState().loadScripts(), useAssetStore.getState().loadAssets()]);
+    await useMarketingStore.getState().load();
+    try { localStorage.removeItem('lastSyncAt'); } catch { /* ignore */ }
+  }
+  try { localStorage.setItem(ownerKey, userId); } catch { /* ignore */ }
+}
+
+async function afterAuthSuccess(userId: string): Promise<void> {
   try {
     await clearDemoData();
   } catch (err) {
     console.warn('[auth] 清空演示数据失败（不影响登录）：', err);
+  }
+  // IndexedDB belongs to this browser profile, not to the signed-in account.
+  // 这一步失败也必须降级（token 已经落地了，不能因此把「已登录」报成登录失败）。
+  try {
+    await alignLocalDataOwner(userId);
+  } catch (err) {
+    console.warn('[auth] 本机数据归属整理失败（不影响登录）：', err);
   }
   try {
     await syncOnLaunch();
@@ -108,6 +140,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         set({ token: stored });
         // token 已失效时由 refreshMe 内部清除本地登录态
         await get().refreshMe();
+        const currentUser = get().user;
+        if (currentUser) await alignLocalDataOwner(currentUser.id);
       }
 
       // authConfigured 只由服务端回答；拿不到就保持默认（false），
@@ -129,7 +163,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const res = await api.authRegister({ username, password });
       setAuthToken(res.token);
       set({ token: res.token, user: res.user });
-      await afterAuthSuccess();
+      await afterAuthSuccess(res.user.id);
     } catch (err) {
       set({ error: messageForError(err) });
       throw err;
@@ -144,7 +178,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const res = await api.authLogin({ username, password });
       setAuthToken(res.token);
       set({ token: res.token, user: res.user });
-      await afterAuthSuccess();
+      await afterAuthSuccess(res.user.id);
     } catch (err) {
       set({ error: messageForError(err) });
       throw err;

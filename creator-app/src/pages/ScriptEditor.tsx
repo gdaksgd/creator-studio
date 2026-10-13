@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
 import { useScriptStore } from '../store/scriptStore';
 import { useTopicStore } from '../store/topicStore';
@@ -28,6 +28,8 @@ import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { Field, Input, Select, Textarea } from '../components/ui/Input';
 import { Spinner } from '../components/ui/Spinner';
+import { ConfirmDialog } from '../components/ui/ConfirmDialog';
+import { useToast } from '../components/ui/Toast';
 
 const PLATFORM_LABELS: Record<Platform, string> = {
   bilibili: 'B站',
@@ -75,7 +77,7 @@ function scriptChars(script: Script): number {
 }
 
 /** 药丸式切换（与选题看板的筛选器同一套观感） */
-const PILL_BASE = 'rounded-full border px-3.5 py-1.5 text-xs font-medium transition-all';
+const PILL_BASE = 'rounded-full border px-3.5 py-1.5 text-xs font-medium transition-colors';
 const PILL_ON = 'border-transparent bg-primary text-white shadow-xs';
 const PILL_OFF =
   'border-border bg-surface text-text-secondary hover:border-border-strong hover:text-text';
@@ -86,8 +88,8 @@ export default function ScriptEditor() {
   const navigate = useNavigate();
   // 分镜增删时自动做位移动画
   const [boardListRef] = useAutoAnimate();
-  const { scripts, loadScripts, createScript, updateScript, addStoryboard, removeStoryboard, updateStoryboard, deleteScript } = useScriptStore();
-  const { topics, loadTopics, updateTopic } = useTopicStore();
+  const { scripts, loading: scriptsLoading, loadScripts, createScript, updateScript, addStoryboard, removeStoryboard, updateStoryboard, replaceStoryboards, deleteScript, saveRevision, restoreRevision } = useScriptStore();
+  const { topics, loading: topicsLoading, loadTopics, updateTopic } = useTopicStore();
 
   const [selectedScriptId, setSelectedScriptId] = useState<string | null>(scriptId || null);
   const [showPairDialog, setShowPairDialog] = useState(false);
@@ -132,7 +134,29 @@ export default function ScriptEditor() {
   const totalDuration = selectedScript?.storyboards.reduce((sum, b) => sum + b.duration, 0) || 0;
 
   // 列表 / 切换器共用的排序（与原实现一致：按创建时间倒序）
-  const sortedScripts = scripts.sort((a, b) => b.createdAt - a.createdAt);
+  // Store already returns newest-first. Copy before sorting to avoid mutating Zustand state
+  // during render and doing unnecessary work on each editor keystroke.
+  const sortedScripts = useMemo(
+    () => [...scripts].sort((a, b) => b.createdAt - a.createdAt),
+    [scripts],
+  );
+  const topicById = useMemo(() => new Map(topics.map((topic) => [topic.id, topic])), [topics]);
+  const [visibleScriptCount, setVisibleScriptCount] = useState(24);
+  const [scriptQuery, setScriptQuery] = useState('');
+  const visibleScripts = useMemo(() => {
+    const normalizedQuery = scriptQuery.trim().toLocaleLowerCase();
+    if (!normalizedQuery) return sortedScripts;
+    return sortedScripts.filter((script) => {
+      const topicTitle = topicById.get(script.topicId)?.title ?? '';
+      return `${topicTitle} ${script.title} ${script.hook} ${PLATFORM_LABELS[script.platform]} ${VERSION_LABELS[script.version]}`.toLocaleLowerCase().includes(normalizedQuery);
+    });
+  }, [scriptQuery, sortedScripts, topicById]);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deletingScript, setDeletingScript] = useState(false);
+  const [overwriteConfirmOpen, setOverwriteConfirmOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [restoringRevisionId, setRestoringRevisionId] = useState<string | null>(null);
+  const toast = useToast();
 
   const handleCreateNew = () => {
     if (topics.length === 0) return;
@@ -142,7 +166,11 @@ export default function ScriptEditor() {
 
   const handleConfirmPair = async () => {
     if (!pairTopicId) return;
-    const script = await createScript(pairTopicId, 'bilibili', 'long');
+    const existing = useScriptStore.getState().scripts.find(
+      (script) => script.topicId === pairTopicId && script.platform === 'bilibili' && script.version === 'long',
+    );
+    const script = existing ?? await createScript(pairTopicId, 'bilibili', 'long');
+    if (existing) toast.info('该选题已有长版 B 站脚本，已打开现有脚本');
     setSelectedScriptId(script.id);
     setShowPairDialog(false);
     navigate(`/scripts/${script.id}`, { replace: true });
@@ -163,15 +191,28 @@ export default function ScriptEditor() {
 
   const handleAddBoard = async () => {
     if (!selectedScript) return;
+    await saveRevision(selectedScript.id, '添加分镜前快照');
     await addStoryboard(selectedScript.id);
+  };
+
+  const handleSaveScriptRevision = async () => {
+    if (!selectedScript) return;
+    await saveRevision(selectedScript.id);
+    toast.success('脚本版本已保存');
   };
 
   const handleDeleteScript = async () => {
     if (!selectedScript) return;
-    if (!confirm('确定删除这个脚本吗？')) return;
-    await deleteScript(selectedScript.id);
-    setSelectedScriptId(null);
-    navigate('/scripts', { replace: true });
+    setDeletingScript(true);
+    try {
+      await deleteScript(selectedScript.id);
+      setSelectedScriptId(null);
+      setDeleteConfirmOpen(false);
+      navigate('/scripts', { replace: true });
+      toast.success('脚本已删除');
+    } finally {
+      setDeletingScript(false);
+    }
   };
 
   const handleAiSuggest = async () => {
@@ -242,8 +283,12 @@ export default function ScriptEditor() {
     }
   };
 
-  const doGenerateScript = async () => {
+  const doGenerateScript = async (replaceExisting = false) => {
     if (!selectedScript || !currentTopic) return;
+    if (!replaceExisting && (selectedScript.hook.trim() || selectedScript.storyboards.length > 0)) {
+      setOverwriteConfirmOpen(true);
+      return;
+    }
     setGenLoading(true);
     setAiError('');
     setShowIdeaEval(false);
@@ -256,28 +301,21 @@ export default function ScriptEditor() {
         productionIdea: currentTopic.productionIdea,
         gameDescription: currentTopic.gameDescription,
       });
-      if (result.hook) {
-        await updateScript(selectedScript.id, { hook: result.hook });
-      }
-      if (result.storyboards.length > 0) {
-        for (const board of result.storyboards) {
-          await addStoryboard(selectedScript.id);
-          const script = useScriptStore.getState().scripts.find((s) => s.id === selectedScript.id);
-          if (script) {
-            const lastBoard = script.storyboards[script.storyboards.length - 1];
-            if (lastBoard) {
-              await updateStoryboard(selectedScript.id, lastBoard.id, {
-                description: board.description,
-                dialogue: board.dialogue,
-                duration: board.duration,
-                visualDirection: board.visualDirection,
-                notes: board.notes,
-              });
-            }
-          }
-        }
-        alert('AI 脚本框架已生成！');
-      }
+      await saveRevision(selectedScript.id, 'AI 重新生成前自动快照');
+      const boards: Storyboard[] = result.storyboards.map((board, index) => ({
+        id: crypto.randomUUID(),
+        sceneNumber: index + 1,
+        description: board.description,
+        dialogue: board.dialogue,
+        duration: board.duration,
+        visualDirection: board.visualDirection,
+        notes: board.notes,
+      }));
+      await updateScript(selectedScript.id, { hook: result.hook || selectedScript.hook });
+      await replaceStoryboards(selectedScript.id, boards);
+      setOverwriteConfirmOpen(false);
+      setShowIdeaEval(false);
+      toast.success(`AI 脚本框架已生成，替换了 ${selectedScript.storyboards.length} 个旧分镜`);
     } catch (err) {
       setAiError((err as Error).message);
     } finally {
@@ -319,6 +357,10 @@ export default function ScriptEditor() {
       setTitleEvalLoading(false);
     }
   };
+
+  if ((scriptsLoading || topicsLoading) && scripts.length === 0 && topics.length === 0) {
+    return <div><PageHeader eyebrow={PAGE_EYEBROW} title={PAGE_TITLE} description={PAGE_DESCRIPTION} /><div className="card flex items-center justify-center py-14"><Spinner label="正在读取本地创作数据…" /></div></div>;
+  }
 
   if (scripts.length === 0 && topics.length === 0) {
     return (
@@ -394,7 +436,7 @@ export default function ScriptEditor() {
     <div className="space-y-4">
       <SectionHeading
         title="脚本列表"
-        hint={`共 ${scripts.length} 条 · 按创建时间倒序`}
+        hint={`${visibleScripts.length} / ${scripts.length} 条 · 按创建时间倒序`}
         action={
           <Button variant="secondary" size="sm" onClick={handleCreateNew}>
             <Plus className="h-3.5 w-3.5" aria-hidden="true" />
@@ -403,22 +445,28 @@ export default function ScriptEditor() {
         }
       />
 
-      {scripts.length === 0 ? (
+      {scripts.length > 0 && (
+        <label className="relative mb-4 block w-full sm:max-w-sm">
+          <span className="sr-only">搜索脚本</span>
+          <Input type="search" value={scriptQuery} onChange={(event) => setScriptQuery(event.target.value)} placeholder="搜索选题、标题、平台…" />
+        </label>
+      )}
+
+      {scriptsLoading ? (
+        <div className="card flex items-center justify-center py-14"><Spinner label="正在读取本地脚本…" /></div>
+      ) : visibleScripts.length === 0 ? (
         <EmptyState
           icon={<Clapperboard className="h-5 w-5" />}
-          title="选择一个脚本开始编辑"
-          description="这里还没有可编辑的脚本，先新建一条；写过的内容会自动保存在本机，重开页面还在。"
+          title={scripts.length ? '没有匹配的脚本' : '选择一个脚本开始编辑'}
+          description={scripts.length ? '换个关键词试试，或清空搜索条件。' : '这里还没有可编辑的脚本，先新建一条；写过的内容会自动保存在本机，重开页面还在。'}
           action={
-            <Button size="sm" onClick={handleCreateNew} disabled={topics.length === 0}>
-              <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-              新建脚本
-            </Button>
+            scripts.length ? <Button size="sm" variant="secondary" onClick={() => setScriptQuery('')}>清空搜索</Button> : <Button size="sm" onClick={handleCreateNew} disabled={topics.length === 0}><Plus className="h-3.5 w-3.5" aria-hidden="true" />新建脚本</Button>
           }
         />
       ) : (
-        <div className="stagger-children grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {sortedScripts.map((script) => {
-            const topic = topics.find((t) => t.id === script.topicId);
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {visibleScripts.slice(0, visibleScriptCount).map((script, index) => {
+            const topic = topicById.get(script.topicId);
             const progress = scriptProgress(script);
             return (
               <button
@@ -428,7 +476,8 @@ export default function ScriptEditor() {
                   setSelectedScriptId(script.id);
                   navigate(`/scripts/${script.id}`, { replace: true });
                 }}
-                className="card card-hover w-full p-4 text-left"
+                className={`card card-hover w-full p-4 text-left ${index < 8 ? 'anim-rise' : ''}`}
+                style={index < 8 ? { animationDelay: `${(0.02 + index * 0.04).toFixed(2)}s` } : undefined}
               >
                 <div className="flex items-start justify-between gap-3">
                   <h3 className="min-w-0 truncate text-[15px] font-semibold tracking-tight text-text">
@@ -472,16 +521,24 @@ export default function ScriptEditor() {
               </button>
             );
           })}
+          {visibleScripts.length > visibleScriptCount && (
+            <div className="flex justify-center pt-1 sm:col-span-2 xl:col-span-3">
+              <Button variant="secondary" onClick={() => setVisibleScriptCount((count) => count + 24)}>
+                显示更多（还有 {visibleScripts.length - visibleScriptCount} 条）
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </div>
   ) : (
     <div className="space-y-4">
       {/* 切换脚本：药丸式，与选题看板的筛选器同一套观感 */}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex min-w-0 items-center gap-2 overflow-hidden">
         <span className="eyebrow mr-1">切换脚本</span>
-        {sortedScripts.map((script) => {
-          const topic = topics.find((t) => t.id === script.topicId);
+        <div className="flex min-w-0 flex-1 gap-2 overflow-x-auto pb-1">
+        {sortedScripts.slice(0, 12).map((script) => {
+          const topic = topicById.get(script.topicId);
           const on = script.id === selectedScriptId;
           return (
             <button
@@ -500,6 +557,8 @@ export default function ScriptEditor() {
             </button>
           );
         })}
+        {sortedScripts.length > 12 && <span className="shrink-0 self-center text-xs text-text-muted">还有 {sortedScripts.length - 12} 条，请从列表搜索切换</span>}
+        </div>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px] xl:items-start">
@@ -550,11 +609,16 @@ export default function ScriptEditor() {
                 >
                   + B站长版
                 </Button>
-                <Button variant="dangerGhost" size="sm" onClick={handleDeleteScript}>
+                <Button variant="dangerGhost" size="sm" onClick={() => setDeleteConfirmOpen(true)}>
                   <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                   删除脚本
                 </Button>
+                <Button variant="secondary" size="sm" onClick={() => setHistoryOpen(true)}>
+                  版本历史{selectedScript.history?.length ? ` · ${selectedScript.history.length}` : ''}
+                </Button>
+                <Button variant="secondary" size="sm" onClick={() => void handleSaveScriptRevision()}>保存版本</Button>
               </div>
+              {selectedScript.history?.length ? <p className="mt-2 text-[11px] text-text-muted">已保存 {selectedScript.history.length} 个版本 · 最近快照 {new Date(selectedScript.history[selectedScript.history.length - 1]!.savedAt).toLocaleString('zh-CN')}</p> : null}
             </div>
 
             {currentTopic?.productionIdea && (
@@ -839,8 +903,9 @@ export default function ScriptEditor() {
                 size="md"
                 onClick={() => doGenerateScript()}
                 loading={genLoading}
+                disabled={genLoading || ideaLoading}
               >
-                {genLoading ? '生成中...' : '确认生成脚本'}
+                {genLoading ? '生成中...' : selectedScript?.storyboards.length || selectedScript?.hook.trim() ? '替换并重新生成' : '生成脚本框架'}
               </Button>
             </>
           ) : undefined
@@ -1107,6 +1172,61 @@ export default function ScriptEditor() {
             ))}
           </Select>
         </Field>
+      </Modal>
+      <ConfirmDialog
+        open={deleteConfirmOpen}
+        title="删除这个脚本？"
+        description={selectedScript ? `「${currentTopic?.title ?? '未关联选题'}」脚本将从本机移除。` : ''}
+        confirmLabel="删除脚本"
+        pending={deletingScript}
+        onConfirm={() => void handleDeleteScript()}
+        onClose={() => setDeleteConfirmOpen(false)}
+      />
+      <ConfirmDialog
+        open={overwriteConfirmOpen}
+        title="用 AI 生成内容替换当前分镜？"
+        description={`当前脚本有 ${selectedScript?.storyboards.length ?? 0} 个分镜${selectedScript?.hook.trim() ? '及开场钩子' : ''}。重新生成会替换它们，无法自动撤销；如需保留，请先复制到备注或先导出备份。`}
+        confirmLabel="确认替换并生成"
+        pending={genLoading}
+        onConfirm={() => void doGenerateScript(true)}
+        onClose={() => { if (!genLoading) setOverwriteConfirmOpen(false); }}
+      />
+      <Modal
+        open={historyOpen}
+        onClose={() => { if (!restoringRevisionId) setHistoryOpen(false); }}
+        size="lg"
+        title="脚本版本历史"
+        description="历史版本保存在本机并随账号云同步，最多保留 50 个；恢复前会自动保存当前内容。"
+      >
+        <div className="space-y-3">
+          {!selectedScript?.history?.length ? (
+            <EmptyState title="还没有脚本快照" description="点击脚本顶部的「保存版本」，或重新生成 AI 脚本前，系统会保存快照。" compact />
+          ) : [...selectedScript.history].reverse().map((revision) => (
+            <article key={revision.id} className="rounded-xl border border-border bg-surface-muted/40 p-3.5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2"><Badge variant="neutral" size="sm">{revision.label}</Badge><span className="text-[11px] text-text-muted">{new Date(revision.savedAt).toLocaleString('zh-CN')}</span></div>
+                  <h3 className="mt-2 line-clamp-2 text-sm font-semibold text-text">{revision.title || currentTopic?.title || '无标题脚本'}</h3>
+                  <p className="mt-1 line-clamp-2 text-xs text-text-secondary">{revision.hook || '没有开场钩子'} · {revision.storyboards.length} 个分镜</p>
+                  <div className="mt-1 text-[11px] text-text-muted">{revision.storyboards.reduce((sum, board) => sum + board.duration, 0)} 秒 · {revision.storyboards.reduce((sum, board) => sum + board.dialogue.length + board.description.length, 0)} 字</div>
+                </div>
+                <Button size="sm" variant="secondary" loading={restoringRevisionId === revision.id} onClick={async () => {
+                  if (!selectedScript) return;
+                  setRestoringRevisionId(revision.id);
+                  try {
+                    await restoreRevision(selectedScript.id, revision.id);
+                    toast.success('已恢复此脚本版本；恢复前内容也已自动保存为快照');
+                    setHistoryOpen(false);
+                  } catch (error) {
+                    toast.error(`恢复版本失败：${(error as Error).message}`);
+                  } finally {
+                    setRestoringRevisionId(null);
+                  }
+                }}>恢复版本</Button>
+              </div>
+            </article>
+          ))}
+        </div>
       </Modal>
     </div>
   );

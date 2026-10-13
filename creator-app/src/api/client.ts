@@ -280,6 +280,7 @@ export interface AiStatusResponse {
   /** 站点是否配了 YouTube 数据源（只用于展示状态，配置方法不给用户看） */
   youtubeConfigured: boolean;
   accountInfo: AccountInfo;
+  legacyAnalyticsAvailable?: boolean;
 }
 
 /** /api/ai-config 的返回：一个账号一份 AI 配置，Key 只回掩码 */
@@ -348,6 +349,12 @@ export const api = {
     request<SyncResult>('/ai/account/sync', { method: 'POST' }),
   getSyncHistory: () =>
     request<SyncHistoryEntry[]>('/ai/account/history'),
+  getAccountSyncStatus: () =>
+    request<{ configured: boolean; updatedAt: number }>('/ai/account/sync-status'),
+  getLegacyAnalyticsClaimStatus: () =>
+    request<{ available: boolean; syncHistoryCount: number }>('/ai/account/legacy-claim-status'),
+  claimLegacyAnalytics: () =>
+    request<{ claimed: boolean }>('/ai/account/claim-legacy', { method: 'POST' }),
 
   // Status
   getStatus: () => request<AiStatusResponse>('/ai/status'),
@@ -370,7 +377,7 @@ export const api = {
 
   // Cloud Sync
   // baseUploadedAt: 上次同步到的云端时间戳，用于乐观锁。云端更新时后端返回 409 CONFLICT
-  uploadSync: (data: { topics: any[]; scripts: any[]; uploadedAt: number; baseUploadedAt?: number }) =>
+  uploadSync: (data: { topics: any[]; scripts: any[]; assets?: any[]; materialFavorites?: any[]; briefAttachments?: any[]; marketingWorkbench?: any; uploadedAt: number; baseUploadedAt?: number }) =>
     request<{ success: boolean; uploadedAt: number }>('/sync/upload', {
       method: 'POST',
       body: JSON.stringify(data),
@@ -378,7 +385,7 @@ export const api = {
 
   // empty: 云端查询成功但无数据（与「查询失败」区分开）
   downloadSync: () =>
-    request<{ topics: any[]; scripts: any[]; uploadedAt: number; empty?: boolean }>('/sync/download'),
+    request<{ topics: any[]; scripts: any[]; assets?: any[]; materialFavorites?: any[]; briefAttachments?: any[]; marketingWorkbench?: { experiments?: any[]; briefs?: any[] }; uploadedAt: number; empty?: boolean }>('/sync/download'),
 
   getSyncStatus: () =>
     request<{ syncConfigured: boolean }>('/sync/status'),
@@ -403,6 +410,11 @@ export const api = {
   //   调用方必须处理 ok=false，不能把「取不到」当成「播放量为 0」。
   getVideoStat: (url: string) =>
     request<VideoStatResponse>(`/video/stat?url=${encodeURIComponent(url)}`),
+  getVideoStats: (urls: string[]) =>
+    request<{ results: VideoStatResponse[]; total: number; okCount: number }>('/video/stats', {
+      method: 'POST',
+      body: JSON.stringify({ urls }),
+    }),
 
   // B站品类基准线
   // ★ ready=false 表示还没采到样本（冷启动 / 采集失败），界面上必须显示「暂无基准数据」，

@@ -1,8 +1,10 @@
 import { Suspense, useEffect, useState } from 'react';
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
+  Bookmark,
   ChartColumn,
-  CloudOff,
+  FlaskConical,
+  Megaphone,
   FileChartColumn,
   FileText,
   Images,
@@ -12,6 +14,7 @@ import {
   Settings,
   Sparkles,
   UserRound,
+  Search,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '../utils/cn';
@@ -38,6 +41,9 @@ const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
       { to: '/', label: '选题看板', desc: '热点评分与选题池', Icon: Layers, end: true },
       { to: '/scripts', label: '脚本编辑', desc: '逐段写作与平台体检', Icon: FileText },
       { to: '/materials', label: '素材工坊', desc: '封面与配图素材', Icon: Images },
+      { to: '/library', label: '素材库', desc: '收藏与复用的素材链接', Icon: Bookmark },
+      { to: '/experiments', label: '内容实验', desc: '假设验证与内容复盘', Icon: FlaskConical },
+      { to: '/marketing-briefs', label: '版本营销简报', desc: '目标、人群、卖点与传播计划', Icon: Megaphone },
     ],
   },
   {
@@ -87,12 +93,8 @@ function SidebarLink({ item }: { item: NavItem }) {
             )}
             aria-hidden="true"
           />
-          <span className="flex min-w-0 flex-col leading-tight">
-            <span className="truncate text-[13px] font-medium">{label}</span>
-            <span className="truncate text-[11px] text-text-muted opacity-0 transition-opacity group-hover:opacity-100">
-              {desc}
-            </span>
-          </span>
+          <span className="min-w-0 truncate text-[13px] font-medium">{label}</span>
+          <span className="sr-only">{desc}</span>
         </>
       )}
     </NavLink>
@@ -170,7 +172,7 @@ function useAuthExpiredToast() {
 
 function SidebarContent() {
   return (
-    <div className="flex h-full flex-col gap-6 px-3 py-5">
+    <div className="flex h-full flex-col gap-7 px-3 py-5">
       <NavLink to="/" className="flex items-center gap-2.5 px-2">
         <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-gradient text-white shadow-md">
           <Sparkles className="h-[18px] w-[18px]" aria-hidden="true" />
@@ -195,14 +197,8 @@ function SidebarContent() {
       </nav>
 
       <div className="flex flex-col gap-3 border-t border-border px-1 pt-4">
-        <span className="inline-flex items-center gap-1.5 self-start rounded-full border border-border bg-surface-muted px-2.5 py-1 text-[11px] text-text-secondary">
-          <CloudOff className="h-3 w-3" aria-hidden="true" />
-          本地优先 · 数据不出本机
-        </span>
-        <AccountEntry />
         <div className="flex items-center justify-between gap-2">
-          <span className="px-1 text-[11px] text-text-muted">v1.0 · 2026</span>
-          <ThemeToggle />
+          <span className="px-1 text-[11px] text-text-muted">创作者工作空间</span>
         </div>
       </div>
     </div>
@@ -211,17 +207,22 @@ function SidebarContent() {
 
 export default function Layout() {
   useAuthExpiredToast();
+  const { pathname } = useLocation();
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  }, [pathname]);
 
   return (
     <div className="flex min-h-screen bg-bg">
       {/* 桌面端：固定侧边栏（应用型产品的主要"骨架"） */}
-      <aside className="sticky top-0 hidden h-screen w-[244px] shrink-0 border-r border-border bg-surface lg:block">
+      <aside className="sticky top-0 hidden h-screen w-[224px] shrink-0 border-r border-border bg-surface lg:block">
         <SidebarContent />
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
         {/* 移动端：顶栏 + 可横滑的导航条（窄屏不至于把导航挤成两行） */}
-        <header className="sticky top-0 z-30 border-b border-border bg-surface/90 backdrop-blur lg:hidden">
+        <header className="sticky top-0 z-30 border-b border-border bg-surface lg:hidden">
           <div className="flex items-center justify-between gap-3 px-4 py-2.5">
             <NavLink to="/" className="flex items-center gap-2">
               <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-gradient text-white">
@@ -258,7 +259,23 @@ export default function Layout() {
           </div>
         </header>
 
-        <main className="mx-auto w-full max-w-[1180px] flex-1 px-5 py-7 sm:px-8">
+        <header className="sticky top-0 z-20 hidden h-14 items-center justify-between border-b border-border bg-surface/95 px-8 backdrop-blur lg:flex">
+          <div className="flex min-w-0 items-center gap-2 text-sm">
+            <span className="text-text-muted">工作空间</span>
+            <span className="text-text-muted">/</span>
+            <span className="truncate font-medium text-text">{ALL_ITEMS.find((item) => item.to === pathname || (item.to !== '/' && pathname.startsWith(`${item.to}/`)))?.label ?? '选题看板'}</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="hidden items-center gap-2 rounded-lg border border-border bg-bg px-3 py-1.5 text-xs text-text-muted xl:flex">
+              <Search className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>创作数据已在本机</span>
+              <kbd className="ml-4 rounded border border-border bg-surface px-1.5 py-0.5 font-mono text-[10px]">LOCAL</kbd>
+            </div>
+            <ThemeToggle />
+            <AccountEntry />
+          </div>
+        </header>
+        <main className="mx-auto w-full max-w-[1380px] flex-1 px-5 py-7 sm:px-8 xl:px-10">
           <Suspense fallback={<LoadingBlock label="正在加载页面…" />}>
             <Outlet />
           </Suspense>

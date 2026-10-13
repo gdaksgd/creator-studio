@@ -102,7 +102,7 @@ app.use('/api/ai', (req, res, next) => {
   const apiPath = req.originalUrl.split('?')[0];
   // M4：封面/平台检查是纯规则引擎，只有显式要求 AI 润色（useAI=true）才占用每日配额
   const coverCheckWithoutAI = apiPath === '/api/ai/evaluate-cover' && !(req.body && req.body.useAI === true);
-  if (req.method === 'GET' || apiPath === '/api/ai/account' || coverCheckWithoutAI) {
+  if (req.method === 'GET' || apiPath === '/api/ai/account' || apiPath === '/api/ai/account/sync' || coverCheckWithoutAI) {
     next();
     return;
   }

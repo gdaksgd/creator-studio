@@ -5,7 +5,6 @@ import { collectRSS } from './collectors/rssCollector.js';
 import { collectYouTube } from './collectors/youtubeCollector.js';
 import { collectBilibili } from './collectors/bilibiliCollector.js';
 import { translateTitles } from './aiService.js';
-import { syncAccount } from './accountSyncService.js';
 
 let isCollecting = false;
 
@@ -118,12 +117,6 @@ export function startScheduler(): void {
     console.warn(`[Scheduler] Light collection disabled (invalid or empty interval: '${config.lightCollectInterval}')`);
   }
 
-  // 每天早上 8:00 自动同步账号数据
-  cron.schedule('0 8 * * *', () => {
-    console.log('[Scheduler] Daily account sync starting...');
-    syncAccount().catch((err) => {
-      console.error('[Scheduler] Account sync failed:', err);
-    });
-  });
-  console.log('[Scheduler] Account sync scheduled: daily at 08:00');
+  // Account analytics are now user-scoped; there is no longer a safe global
+  // account sync job. Authenticated users trigger their own sync on demand.
 }
