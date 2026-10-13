@@ -12,8 +12,10 @@
 //   6. 缓存命名空间跟登录态绑定，且绝不是所有账号共用的 'anon' 槽位
 //      （/api/ai/account* 本身不设 Cache-Control，所以这里只验我们自己的缓存层）
 //
-// 跑完请清理云端测试账号：
-//   cd D:\自媒体之路\server; npx.cmd tsx scripts/cloud-admin.ts prune-prefix "anc"
+// 账号：优先登录固定的探针账号 analytics-cache-probe；不存在才注册一次。
+// 注册接口限流 5 次 / 10 分钟（防批量刷号），反复跑探针不能每次都新注册。
+// 想彻底清掉这个账号：
+//   cd D:\自媒体之路\server; npx.cmd tsx scripts/cloud-admin.ts prune-prefix "analytics-cache-probe"
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -21,8 +23,7 @@ import path from 'node:path';
 
 const base = (process.argv[2] || 'http://127.0.0.1:3001').replace(/\/+$/, '');
 const PORT = 9381;
-const NONCE = Date.now().toString(36);
-const USER = `anc${NONCE}`.slice(0, 24); // USERNAME_PATTERN 上限 24 字符
+const USER = 'analytics-cache-probe'; // USERNAME_PATTERN 上限 24 字符
 const PASSWORD = 'ProbePass123!';
 
 const EDGE_CANDIDATES = [
@@ -39,20 +40,29 @@ function check(name, ok, extra = '') {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// ── 临时账号 ────────────────────────────────────────────────
-const regRes = await fetch(base + '/api/auth/register', {
-  method: 'POST',
-  headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ username: USER, password: PASSWORD }),
-});
-const reg = await regRes.json();
-if (!regRes.ok || !reg.token) {
-  console.error('注册临时账号失败：', regRes.status, JSON.stringify(reg));
-  process.exit(1);
+// ── 探针账号：先登录，登录不上再注册一次 ────────────────────
+const post = async (p, payload) => {
+  const res = await fetch(base + p, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const body = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, body };
+};
+
+let session = await post('/api/auth/login', { username: USER, password: PASSWORD });
+if (session.ok && session.body.token) {
+  console.log(`复用探针账号 ${USER} (${session.body.user.id})\n`);
+} else {
+  session = await post('/api/auth/register', { username: USER, password: PASSWORD });
+  if (!session.ok || !session.body.token) {
+    console.error('探针账号既登录不上、也注册不了：', session.status, JSON.stringify(session.body));
+    process.exit(1);
+  }
+  console.log(`新注册探针账号 ${USER} (${session.body.user.id})\n`);
 }
-const TOKEN = reg.token;
-const USER_ID = reg.user.id;
-console.log(`临时账号 ${USER} (${USER_ID}) 注册成功\n`);
+const TOKEN = session.body.token;
 
 const edge = EDGE_CANDIDATES.find((p) => fs.existsSync(p));
 if (!edge) throw new Error('找不到 Edge');
@@ -288,6 +298,15 @@ try {
   check('TTL 过期后：/api/ai/account/history 回源 1 次', expiredHistory === 1, `count=${expiredHistory}`);
   const expiredText = await evaluate('document.body.innerText');
   check('回源后不再是缓存标记（显示「刚刚更新」）', expiredText.includes('刚刚更新'), '');
+
+  // ── 6. 布局：右上角新增的缓存提示不能把页面撑出横向滚动条 ──
+  for (const width of [1440, 390]) {
+    await send('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: false });
+    await sleep(700);
+    const box = await evaluate(`(() => { const d = document.documentElement; return { sw: d.scrollWidth, cw: d.clientWidth }; })()`);
+    check(`宽度 ${width} 无横向溢出`, box.sw <= box.cw + 1, `scrollW=${box.sw} clientW=${box.cw}`);
+  }
+  await send('Emulation.clearDeviceMetricsOverride', {});
 
   const errors = await evaluate(`window.__probeErrors ? window.__probeErrors.length : 0`);
   check('页面无未捕获异常计数（尽力而为）', !errors || errors === 0, `errors=${errors}`);
