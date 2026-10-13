@@ -34,7 +34,9 @@ export async function optionalAuth(req: Request, _res: Response, next: NextFunct
       authed.cloudAccount = blob.accounts[user.id];
     }
   } catch (err) {
-    // 云端不可用时按匿名处理：AI 走站点公共 Key，接口本身不因此失败
+    // 云端不可用时按匿名处理：AI 走站点公共 Key，接口本身不因此失败。
+    // 但读接口得知道「是读不到，而不是没有数据」，否则看板会显示成全 0。
+    (req as AuthedRequest).authCloudError = true;
     console.warn('[auth] optionalAuth skipped:', err instanceof Error ? err.message : err);
   }
 

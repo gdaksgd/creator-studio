@@ -10,7 +10,7 @@ import { optionalAuth } from '../middleware/optionalAuth.js';
 import type { AuthedRequest } from '../middleware/requireAuth.js';
 import { decodeAccountKey } from '../services/aiConfigStore.js';
 import { AI_NOT_CONFIGURED_MESSAGE, hasAiKey, runWithAiKey } from '../services/aiContext.js';
-import { claimLegacyAnalyticsForUser, getUserAccountInfo, getUserSyncHistory, getUserSyncStatus, hasUserAccountAnalytics, isLegacyClaimOwner, legacyAnalyticsHasData, sanitizeAccountInfoPatch, updateUserAccountInfo } from '../services/userAnalyticsStore.js';
+import { accountInfoFromCloud, claimLegacyAnalyticsForUser, getUserSyncStatus, hasUserAccountAnalytics, isLegacyClaimOwner, legacyAnalyticsHasData, sanitizeAccountInfoPatch, syncHistoryFromCloud, updateUserAccountInfo } from '../services/userAnalyticsStore.js';
 import { requireAuth } from '../middleware/requireAuth.js';
 import { getLegacyAccountAnalyticsClaimStatus } from '../services/cloudStore.js';
 
@@ -20,6 +20,9 @@ const router = Router();
 interface AiRequest extends AuthedRequest {
   aiKeySource?: 'account' | 'server' | 'none';
 }
+
+/** 带了合法 token、但云端快照读不到时的统一文案：不能显示成「全 0」 */
+const CLOUD_UNREADABLE_MESSAGE = '云端数据暂时读不到，请稍后重试';
 
 // 每个 AI 请求先「可选登录」，再把该请求要用的 DeepSeek Key 绑进请求作用域：
 //   已登录且账号里存了 Key → 用账号自己的；否则 → 用 server/.env 的站点公共 Key。
@@ -215,11 +218,17 @@ router.post('/generate-script', async (req, res) => {
 });
 
 // 获取/更新账号信息
+// 读接口一律吃 optionalAuth 已经挂在 req 上的账号切片，不再自己去读一遍云端。
+// 带 token 但云端读不到时必须报 502：不能把「读不到」显示成「全 0」。
 router.get('/account', async (req, res) => {
-  const userId = (req as AiRequest).authUser?.id;
-  if (!userId) return res.json(defaultAccountInfo());
+  const authed = req as AiRequest;
+  const userId = authed.authUser?.id;
+  if (!userId) {
+    if (authed.authCloudError) return res.status(502).json({ error: CLOUD_UNREADABLE_MESSAGE, code: 'CLOUD_ERROR' });
+    return res.json(defaultAccountInfo());
+  }
   try {
-    res.json(await getUserAccountInfo(userId));
+    res.json(accountInfoFromCloud(authed.cloudAccount));
   } catch (err) {
     res.status(502).json({ error: (err as Error).message, code: 'CLOUD_ERROR' });
   }
@@ -250,10 +259,34 @@ router.post('/account/sync', async (req, res) => {
 
 // 获取同步历史
 router.get('/account/history', async (req, res) => {
-  const userId = (req as AiRequest).authUser?.id;
-  if (!userId) return res.json([]);
+  const authed = req as AiRequest;
+  const userId = authed.authUser?.id;
+  if (!userId) {
+    if (authed.authCloudError) return res.status(502).json({ error: CLOUD_UNREADABLE_MESSAGE, code: 'CLOUD_ERROR' });
+    return res.json([]);
+  }
   try {
-    res.json(await getUserSyncHistory(userId));
+    res.json(syncHistoryFromCloud(authed.cloudAccount));
+  } catch (err) {
+    res.status(502).json({ error: (err as Error).message, code: 'CLOUD_ERROR' });
+  }
+});
+
+// 数据看板一次拿全：账号统计 + 同步历史。
+// 原来是两个接口并行，各读一次云端（一个首屏就是 2 次请求 / 4 次云端往返）；
+// 现在一个请求、一次云端往返，前端也只需维护一份缓存。
+router.get('/account/overview', async (req, res) => {
+  const authed = req as AiRequest;
+  const userId = authed.authUser?.id;
+  if (!userId) {
+    if (authed.authCloudError) return res.status(502).json({ error: CLOUD_UNREADABLE_MESSAGE, code: 'CLOUD_ERROR' });
+    return res.json({ account: defaultAccountInfo(), history: [] });
+  }
+  try {
+    res.json({
+      account: accountInfoFromCloud(authed.cloudAccount),
+      history: syncHistoryFromCloud(authed.cloudAccount),
+    });
   } catch (err) {
     res.status(502).json({ error: (err as Error).message, code: 'CLOUD_ERROR' });
   }
@@ -328,13 +361,17 @@ router.post('/materials/analyze', async (req, res) => {
 router.get('/status', async (req, res) => {
   const authed = req as AiRequest;
   try {
+    // 带 token 但云端读不到：宁可报错，也不要把账号数据静默显示成全 0
+    if (authed.authUser && authed.authCloudError) {
+      return res.status(502).json({ error: CLOUD_UNREADABLE_MESSAGE, code: 'CLOUD_ERROR' });
+    }
     const legacy = await getLegacyAccountAnalyticsClaimStatus().catch(() => ({ available: false, claimed: false }));
     res.json({
       aiConfigured: hasAiKey(),
       aiSource: authed.aiKeySource ?? (config.deepseekApiKey ? 'server' : 'none'),
       // YouTube 数据源是站点级公共配置（用户不需要、也不该看到配置方式），这里只回状态
       youtubeConfigured: isYouTubeConfigured(),
-      accountInfo: authed.authUser ? await getUserAccountInfo(authed.authUser.id) : defaultAccountInfo(),
+      accountInfo: authed.authUser ? accountInfoFromCloud(authed.cloudAccount) : defaultAccountInfo(),
       legacyAnalyticsAvailable: legacy.available,
     });
   } catch (err) {

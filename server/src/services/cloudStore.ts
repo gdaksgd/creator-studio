@@ -225,8 +225,23 @@ export function normalizeBlob(raw: unknown): CloudBlob {
   return blob;
 }
 
-/** 读云端那一行。表里没行时返回空 blob（不是错误） */
-export async function readCloud(): Promise<CloudSnapshot> {
+// ---------- 进程内读缓存（单飞 + 1.5 秒） ----------
+// 打开数据看板会同时打几个请求（/auth/me、/sync/download、/ai/account/overview…），
+// 过去每个请求都独立去 Supabase 取同一行 —— 冷启动单次 0.35～2 秒，首屏因此经常超过 3 秒。
+// 这里只做两件不改变写入语义的事：
+//   · 单飞：并发到达的 readCloud() 共用同一次云端往返；
+//   · 1.5 秒极短 TTL：把同一批首屏请求兜进同一次往返。
+// 写入路径完全不受影响：updateCloud() 在写锁里用 fetchCloud() 直读云端，
+// writeCloud() 成功后立刻作废缓存，所以「读-改-写」永远基于云端最新数据。
+// 注意：readCloud() 返回的是**共享快照**，调用方不得就地修改（要改就走 updateCloud）。
+const READ_CACHE_MS = 1500;
+let readCache: { snapshot: CloudSnapshot; at: number } | null = null;
+let readInFlight: Promise<CloudSnapshot> | null = null;
+/** 每次写云端自增：用来丢弃「写入前发出、写入后才回来」的读，避免刚写完就读到旧快照 */
+let readGeneration = 0;
+
+/** 真去云端取一次，不做任何进程内缓存 */
+async function fetchCloud(): Promise<CloudSnapshot> {
   assertConfigured();
   const { data, error } = await supabase!
     .from(SYNC_TABLE)
@@ -250,6 +265,26 @@ export async function readCloud(): Promise<CloudSnapshot> {
   return { blob, uploadedAt, empty };
 }
 
+/** 读云端那一行（进程内单飞 + 1.5 秒缓存）。表里没行时返回空 blob（不是错误） */
+export async function readCloud(): Promise<CloudSnapshot> {
+  const cached = readCache;
+  if (cached && Date.now() - cached.at < READ_CACHE_MS) return cached.snapshot;
+  if (readInFlight) return readInFlight;
+
+  const generation = readGeneration;
+  const task: Promise<CloudSnapshot> = fetchCloud()
+    .then((snapshot) => {
+      // 这次读的过程中云端被写过：结果可能已经是旧的，照样返回（请求不该失败），但绝不进缓存
+      if (generation === readGeneration) readCache = { snapshot, at: Date.now() };
+      return snapshot;
+    })
+    .finally(() => {
+      if (readInFlight === task) readInFlight = null;
+    });
+  readInFlight = task;
+  return task;
+}
+
 /** 整体写回云端（行级 uploaded_at 取所有账号里最新的时间） */
 export async function writeCloud(blob: CloudBlob): Promise<void> {
   assertConfigured();
@@ -266,6 +301,10 @@ export async function writeCloud(blob: CloudBlob): Promise<void> {
     console.error('[cloud] write failed:', error.message);
     throw new CloudError(502, 'CLOUD_ERROR', '云端写入失败: ' + error.message);
   }
+
+  // 刚写过：缓存里那一份一定旧了，立刻作废；并让还在飞的读不要回填
+  readGeneration += 1;
+  readCache = null;
 }
 
 // ---------- 进程内串行化 ----------
@@ -276,7 +315,8 @@ let writeChain: Promise<unknown> = Promise.resolve();
 /** 在写锁里执行一段「读-改-写」；mutator 抛错时不会写回 */
 export function updateCloud<T>(mutator: (blob: CloudBlob) => T | Promise<T>): Promise<T> {
   const run = writeChain.then(async () => {
-    const { blob } = await readCloud();
+    // 直读云端，绝不用进程内缓存 —— 否则并发写入可能基于旧快照互相覆盖
+    const { blob } = await fetchCloud();
     const result = await mutator(blob);
     await writeCloud(blob);
     return result;

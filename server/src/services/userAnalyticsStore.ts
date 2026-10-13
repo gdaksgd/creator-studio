@@ -1,6 +1,7 @@
 import { defaultAccountInfo, getLegacySharedAccountAnalytics, hasMeaningfulAccountInfo, migrateSharedAnalyticsToUserInfo } from '../db.js';
 import type { AccountInfo, SyncHistoryEntry } from '../types.js';
 import { claimLegacyAccountAnalytics, readCloud, updateCloud } from './cloudStore.js';
+import type { CloudAccountData } from './cloudStore.js';
 
 function normalizeAccountInfo(raw: unknown): AccountInfo {
   const defaults = defaultAccountInfo();
@@ -66,9 +67,22 @@ export function sanitizeAccountInfoPatch(raw: unknown): Partial<AccountInfo> {
   return patch as Partial<AccountInfo>;
 }
 
+/**
+ * 只吃「请求里已经读到的账号切片」，不再自己去读云端。
+ * optionalAuth / requireAuth 已经把整份快照读在手上，读接口再读一遍等于白等一次云端往返。
+ */
+export function accountInfoFromCloud(account: CloudAccountData | undefined): AccountInfo {
+  return normalizeAccountInfo(account?.accountInfo);
+}
+
+/** 同上：同步历史也只吃已经读到的账号切片 */
+export function syncHistoryFromCloud(account: CloudAccountData | undefined): SyncHistoryEntry[] {
+  return normalizeHistory(account?.syncHistory);
+}
+
 export async function getUserAccountInfo(userId: string): Promise<AccountInfo> {
   const { blob } = await readCloud();
-  return normalizeAccountInfo(blob.accounts[userId]?.accountInfo);
+  return accountInfoFromCloud(blob.accounts[userId]);
 }
 
 export async function hasUserAccountAnalytics(userId: string): Promise<boolean> {
@@ -93,7 +107,7 @@ export async function updateUserAccountInfo(userId: string, updates: Partial<Acc
 
 export async function getUserSyncHistory(userId: string): Promise<SyncHistoryEntry[]> {
   const { blob } = await readCloud();
-  return normalizeHistory(blob.accounts[userId]?.syncHistory);
+  return syncHistoryFromCloud(blob.accounts[userId]);
 }
 
 export async function getUserSyncStatus(userId: string): Promise<{ configured: boolean; updatedAt: number }> {

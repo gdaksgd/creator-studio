@@ -4,7 +4,8 @@ import { useTopicStore } from '../store/topicStore';
 import { useAuthStore } from '../services/authService';
 // 小时级本地缓存：账号统计只有「手动同步」或「改抖音数据」时才会变，
 // 没必要每次打开都去服务端读一遍云端快照（本机实测 1.2～2.0 秒）。
-import { isCacheFresh, loadWithCache, readCache, writeCache } from '../services/queryCache';
+// 过期时也先拿旧数据渲染、再后台回源（loadWithRevalidate）——「先画出来」才是打开速度。
+import { isCacheFresh, loadWithCache, loadWithRevalidate, readCache, writeCache } from '../services/queryCache';
 import { formatDeviation, formatViews } from '../utils/prediction';
 import type { BenchmarkSnapshot, RetrospectiveTag } from '../types';
 import { Card } from '../components/ui/Card';
@@ -115,6 +116,9 @@ const fmtWindow = (days: number | null) => (days === null ? '榜单快照' : `�
 /** 缓存键。账号维度必须带命名空间：同一浏览器换账号登录不会读到上一个人的统计 */
 const analyticsKey = (table: string, scope: string) => `analytics:${table}:${scope}`;
 
+/** 数据看板一屏所需的全部远端数据（服务端 /ai/account/overview 一次读云端就给全） */
+type AnalyticsOverview = { account: AccountInfo; history: SyncHistoryEntry[] };
+
 /**
  * 缓存命名空间。
  *
@@ -181,7 +185,7 @@ export default function Analytics() {
     if (!useAuthStore.getState().token) return;
     const timer = window.setInterval(() => {
       if (busyRef.current || document.visibilityState !== 'visible') return;
-      void readCache(analyticsKey('account', cacheScope())).then((cached) => {
+      void readCache(analyticsKey('overview', cacheScope())).then((cached) => {
         if (!isCacheFresh(cached?.fetchedAt)) void loadData(false, { silent: true });
       });
     }, 60 * 1000);
@@ -201,22 +205,27 @@ export default function Analytics() {
   /**
    * 取账号统计。
    *
-   * 两个接口都要在服务端读一遍云端快照（本机实测 1.2～2.0 秒），但账号数据
-   * 只有「点立即同步」或「改抖音数据」时才会变 —— 所以走小时级本地缓存：
-   * 一小时内重复打开、切页面回来都不再发请求。force=true（错误态点重新加载、
-   * 后台每小时刷新）绕过缓存；silent=true 时不显示整页 loading。
+   * 服务端一次 /ai/account/overview 就够了（原来是两个接口并行、各读一遍云端快照）。
+   * 账号数据只有「点立即同步」或「改抖音数据」时才会变，所以走小时级本地缓存；
+   * 更关键的是**过期时也先用旧数据把看板画出来**，再去后台回源 —— 让首屏空等的
+   * 就是那一次云端往返（本机 0.35～2.0 秒，公网还要再加一截隧道延迟）。
+   * force=true（错误态点重新加载）仍然强制回源，但同样先渲染手里已有的数据。
    */
   const loadData = async (force = false, options: { silent?: boolean } = {}) => {
     const scope = cacheScope();
     if (!options.silent) setInitialLoading(true);
     setLoadError(null);
-    try {
-      const [status, hist] = await Promise.all([
-        loadWithCache(analyticsKey('account', scope), () => api.getAccount(), { force }),
-        loadWithCache(analyticsKey('history', scope), () => api.getSyncHistory(), { force }),
-      ]);
-      if (status.data) {
-        const snapshot = status.data;
+    /** 已经用缓存画过一屏：不必再让整页 loading 挡住它 */
+    let painted = false;
+
+    const apply = (result: {
+      data: AnalyticsOverview | null;
+      fetchedAt: number | null;
+      fromCache: boolean;
+      error: unknown;
+    }) => {
+      if (result.data) {
+        const snapshot = result.data.account;
         setAccount(snapshot);
         setDouyinForm({
           followers: snapshot.douyinFollowers || 0,
@@ -224,17 +233,29 @@ export default function Analytics() {
           totalVideos: snapshot.douyinTotalVideos || 0,
           totalLikes: snapshot.douyinTotalLikes || 0,
         });
-        setFromCache(status.fromCache);
-        setCachedAt(status.fetchedAt);
+        setHistory(result.data.history ?? []);
+        setFromCache(result.fromCache);
+        setCachedAt(result.fetchedAt);
+        if (!painted) {
+          painted = true;
+          if (!options.silent) setInitialLoading(false);
+        }
       }
-      if (hist.data) setHistory(hist.data);
-      const failure = status.error ?? hist.error;
-      if (failure) {
-        console.error('Failed to load analytics:', failure);
-        setLoadError(failure instanceof Error ? failure.message : '数据暂时无法读取');
+      if (result.error) {
+        console.error('Failed to load analytics:', result.error);
+        setLoadError(result.error instanceof Error ? result.error.message : '数据暂时无法读取');
       }
+    };
+
+    try {
+      await loadWithRevalidate(
+        analyticsKey('overview', scope),
+        () => api.getAccountOverview(),
+        apply,
+        { force },
+      );
     } finally {
-      if (!options.silent) setInitialLoading(false);
+      if (!options.silent && !painted) setInitialLoading(false);
     }
   };
 
@@ -273,9 +294,8 @@ export default function Analytics() {
       const hist = await api.getSyncHistory();
       setHistory(hist);
       // 手动同步是最权威的一次回源：顺手刷新缓存，切页面回来不必再拉
-      const scope = cacheScope();
-      const fetchedAt = await writeCache(analyticsKey('account', scope), result.accountInfo);
-      await writeCache(analyticsKey('history', scope), hist);
+      const overview: AnalyticsOverview = { account: result.accountInfo, history: hist };
+      const fetchedAt = await writeCache(analyticsKey('overview', cacheScope()), overview);
       setCachedAt(fetchedAt);
       setFromCache(false);
     } catch (err) {
@@ -296,7 +316,7 @@ export default function Analytics() {
       });
       setAccount(updated);
       // 本地改动同样写回缓存，避免下一次打开又看到旧数字
-      await writeCache(analyticsKey('account', cacheScope()), updated);
+      await writeCache(analyticsKey('overview', cacheScope()), { account: updated, history });
       setEditingDouyin(false);
     } catch (err) {
       toast.error('保存失败：' + (err as Error).message);

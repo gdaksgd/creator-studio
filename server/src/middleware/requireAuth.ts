@@ -15,6 +15,11 @@ import type { CloudAccountData, CloudUserRecord } from '../services/cloudStore.j
 export interface AuthedRequest extends Request {
   authUser?: CloudUserRecord;
   cloudAccount?: CloudAccountData;
+  /**
+   * 只有 optionalAuth 会写：带了合法 token，但云端快照读失败。
+   * 「云端读不到」不等于「没有数据」，读接口必须据此报错而不是回空值。
+   */
+  authCloudError?: boolean;
 }
 
 export const UNAUTHORIZED_BODY = { error: '未登录或登录已过期', code: 'UNAUTHORIZED' } as const;

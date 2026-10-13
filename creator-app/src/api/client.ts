@@ -343,6 +343,9 @@ export const api = {
 
   // Account
   getAccount: () => request<AccountInfo>('/ai/account'),
+  /** 数据看板专用：一次请求同时拿账号统计与同步历史（省掉一次云端往返） */
+  getAccountOverview: () =>
+    request<{ account: AccountInfo; history: SyncHistoryEntry[] }>('/ai/account/overview'),
   updateAccount: (data: Partial<AccountInfo>) =>
     request<AccountInfo>('/ai/account', { method: 'POST', body: JSON.stringify(data) }),
   syncAccount: () =>

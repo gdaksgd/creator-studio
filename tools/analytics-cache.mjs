@@ -140,7 +140,7 @@ async function waitFor(expression, timeoutMs, label) {
     try {
       if (await evaluate(expression)) return true;
     } catch { /* 页面可能正在换文档 */ }
-    await sleep(300);
+    await sleep(100);
   }
   throw new Error(`等不到：${label}`);
 }
@@ -227,41 +227,43 @@ try {
 
   // ── 1. 首次打开数据看板 ────────────────────────────────
   reqs = [];
+  const t0First = Date.now();
   await navigate(base + '/analytics');
   await evaluate(`localStorage.setItem('creator-studio-token', ${JSON.stringify(TOKEN)}); document.body.innerText.includes('总粉丝数')`);
   await waitFor(RENDERED, 30000, '数据看板渲染出账号数字');
+  const firstRenderMs = Date.now() - t0First;
   await sleep(800); // 让并发的请求都记下来
-  const firstAccount = hits('/api/ai/account', 'GET');
-  const firstHistory = hits('/api/ai/account/history', 'GET');
-  check('首次打开：/api/ai/account 恰好请求 1 次', firstAccount === 1, `count=${firstAccount}`);
-  check('首次打开：/api/ai/account/history 恰好请求 1 次', firstHistory === 1, `count=${firstHistory}`);
+  const firstOverview = hits('/api/ai/account/overview', 'GET');
+  const firstLegacy = hits('/api/ai/account', 'GET');
+  check('首次打开：/api/ai/account/overview 恰好请求 1 次（两个接口已合并）', firstOverview === 1, `count=${firstOverview}`);
+  check('首次打开：旧的 /api/ai/account 单接口 0 次', firstLegacy === 0, `count=${firstLegacy}`);
   const firstText = await evaluate('document.body.innerText');
   check('首次打开显示「刚刚更新」而不是缓存标记', firstText.includes('刚刚更新'), '');
+  check('冷启动（无缓存）打开耗时 < 6000ms', firstRenderMs < 6000, `${firstRenderMs}ms`);
 
   // ── 2. 整页刷新 → 完全命中缓存 ─────────────────────────
   reqs = [];
+  const t0Warm = Date.now();
   await reload();
   await waitFor(RENDERED, 30000, '刷新后数据看板渲染出账号数字');
+  const warmRenderMs = Date.now() - t0Warm;
   await sleep(800);
-  const secondAccount = hits('/api/ai/account', 'GET');
-  const secondHistory = hits('/api/ai/account/history', 'GET');
-  check('刷新后：/api/ai/account 0 次请求（命中本地缓存）', secondAccount === 0, `count=${secondAccount}`);
-  check('刷新后：/api/ai/account/history 0 次请求（命中本地缓存）', secondHistory === 0, `count=${secondHistory}`);
+  const secondOverview = hits('/api/ai/account/overview', 'GET');
+  check('刷新后：/api/ai/account/overview 0 次请求（命中本地缓存）', secondOverview === 0, `count=${secondOverview}`);
   const secondText = await evaluate('document.body.innerText');
   check('刷新后页面显示「缓存 · N 分钟前」', /缓存 · /.test(secondText), '');
+  check('命中缓存的打开耗时 < 1500ms', warmRenderMs < 1500, `${warmRenderMs}ms`);
 
   // ── 3. 缓存命名空间绑定登录态 ─────────────────────────────
   const rows = await evaluate('window.__cacheRows()');
   const keys = Object.keys(rows || {});
-  const accountKeys = keys.filter((k) => k.startsWith('analytics:account:'));
-  const historyKeys = keys.filter((k) => k.startsWith('analytics:history:'));
-  const accountKey = accountKeys[0] || '';
-  check('账号统计写成 analytics:account:<命名空间>', accountKeys.length === 1, keys.join(','));
-  check('历史数据写成 analytics:history:<命名空间>', historyKeys.length === 1, '');
-  check('命名空间不是所有账号共用的 anon 槽位', accountKey !== '' && !accountKey.endsWith(':anon'), accountKey);
+  const overviewKeys = keys.filter((k) => k.startsWith('analytics:overview:'));
+  const overviewKey = overviewKeys[0] || '';
+  check('看板数据只写一个 analytics:overview:<命名空间> 键', overviewKeys.length === 1, keys.join(','));
+  check('命名空间不是所有账号共用的 anon 槽位', overviewKey !== '' && !overviewKey.endsWith(':anon'), overviewKey);
 
   // ── 4. 手动同步不被缓存挡住，并把结果写回缓存 ─────────────
-  const beforeSyncAt = Number(rows[accountKey] || 0);
+  const beforeSyncAt = Number(rows[overviewKey] || 0);
   reqs = [];
   const clicked = await evaluate(`window.__clickByText('立即同步')`);
   check('页面上找得到「立即同步」按钮', clicked === true, '');
@@ -273,7 +275,7 @@ try {
   let afterSyncAt = beforeSyncAt;
   for (let i = 0; i < 60 && afterSyncAt <= beforeSyncAt; i += 1) {
     const snapshot = await evaluate('window.__cacheRows()');
-    afterSyncAt = Number((snapshot || {})[accountKey] || 0);
+    afterSyncAt = Number((snapshot || {})[overviewKey] || 0);
     if (afterSyncAt > beforeSyncAt) break;
     await sleep(500);
   }
@@ -283,21 +285,23 @@ try {
   await reload();
   await waitFor(RENDERED, 30000, '同步后刷新仍能渲染');
   await sleep(800);
-  check('手动同步之后再刷新：仍然 0 次请求', hits('/api/ai/account', 'GET') === 0, `account=${hits('/api/ai/account', 'GET')}`);
+  check('手动同步之后再刷新：仍然 0 次请求', hits('/api/ai/account/overview', 'GET') === 0, `overview=${hits('/api/ai/account/overview', 'GET')}`);
 
-  // ── 5. TTL 过期 → 回源一次 ─────────────────────────────
-  const expireResult = await evaluate(`window.__expireCacheByPrefix(['analytics:account:', 'analytics:history:'])`);
-  check('把两行缓存改成 2 小时前（模拟 TTL 过期）', expireResult === 'ok:2', String(expireResult));
+  // ── 5. TTL 过期 → 先渲染旧数据，再回源一次 ─────────────
+  const expireResult = await evaluate(`window.__expireCacheByPrefix(['analytics:overview:'])`);
+  check('把缓存行改成 2 小时前（模拟 TTL 过期）', expireResult === 'ok:1', String(expireResult));
   reqs = [];
+  const t0Stale = Date.now();
   await reload();
   await waitFor(RENDERED, 30000, '过期后重新回源并渲染');
+  const staleRenderMs = Date.now() - t0Stale;
   await sleep(1200);
-  const expiredAccount = hits('/api/ai/account', 'GET');
-  const expiredHistory = hits('/api/ai/account/history', 'GET');
-  check('TTL 过期后：/api/ai/account 回源 1 次', expiredAccount === 1, `count=${expiredAccount}`);
-  check('TTL 过期后：/api/ai/account/history 回源 1 次', expiredHistory === 1, `count=${expiredHistory}`);
+  const expiredOverview = hits('/api/ai/account/overview', 'GET');
+  check('TTL 过期后：/api/ai/account/overview 回源 1 次', expiredOverview === 1, `count=${expiredOverview}`);
   const expiredText = await evaluate('document.body.innerText');
   check('回源后不再是缓存标记（显示「刚刚更新」）', expiredText.includes('刚刚更新'), '');
+  // 过期后也必须秒开：先用旧数据渲染，再在后台把新数据填进来
+  check('缓存过期后打开耗时 < 1000ms（先渲染旧数据，再后台回源）', staleRenderMs < 1000, `${staleRenderMs}ms`);
 
   // ── 6. 布局：右上角新增的缓存提示不能把页面撑出横向滚动条 ──
   for (const width of [1440, 390]) {

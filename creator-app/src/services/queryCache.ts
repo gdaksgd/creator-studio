@@ -133,3 +133,48 @@ export async function loadWithCache<T>(
     return { data: null, fetchedAt: null, fromCache: false, stale: false, error };
   }
 }
+
+/**
+ * 「先渲染、再回源」（stale-while-revalidate）。
+ *
+ * 与 loadWithCache 的区别：缓存过期时**不再让用户等这一次网络往返**，而是先把旧数据
+ * 交给调用方渲染，再在后台把新数据取回来、通过 onData 二次通知。
+ * 用户抱怨的「每次打开都要转 3 秒」就出在这里：一小时内命中缓存没问题，但过了一小时
+ * 的第一次打开要等完整的一次回源（本机实测 1.3 秒，公网更久）。
+ *
+ * 命中未过期缓存时行为与 loadWithCache 完全一致（一个请求都不发）。
+ * onData 可能被调用两次：先旧后新；调用方只需把每次结果都当成「当前最新」渲染即可。
+ */
+export async function loadWithRevalidate<T>(
+  key: string,
+  loader: () => Promise<T>,
+  onData: (result: CacheResult<T>) => void,
+  options: { force?: boolean; ttlMs?: number } = {},
+): Promise<void> {
+  const cached = await readCache<T>(key);
+
+  if (!options.force && cached && isCacheFresh(cached.fetchedAt, options.ttlMs)) {
+    onData({ data: cached.data, fetchedAt: cached.fetchedAt, fromCache: true, stale: false, error: null });
+    return;
+  }
+
+  // 有过期缓存也先画出来 —— 空等网络是卡顿感的唯一来源
+  if (cached) {
+    onData({ data: cached.data, fetchedAt: cached.fetchedAt, fromCache: true, stale: true, error: null });
+  }
+
+  try {
+    const data = await loader();
+    const fetchedAt = await writeCache(key, data);
+    onData({ data, fetchedAt, fromCache: false, stale: false, error: null });
+  } catch (error) {
+    // 有旧缓存时上面的 onData 已经把页面画出来了，这里只把错误补报给调用方提示
+    onData({
+      data: cached?.data ?? null,
+      fetchedAt: cached?.fetchedAt ?? null,
+      fromCache: !!cached,
+      stale: !!cached,
+      error,
+    });
+  }
+}
