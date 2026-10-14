@@ -1,0 +1,26 @@
+# Render Blueprint —— 一键创建托管部署
+# 使用方式：Render Dashboard → New → Blueprint → 选择本仓库。
+# 完整说明见 docs/deploy-render.md
+services:
+  - type: web
+    name: creator-studio
+    runtime: node
+    plan: free
+    rootDir: server
+    buildCommand: |
+      npm ci
+      npm run build
+      cd ../creator-app && npm ci && npm run build
+      rm -rf ../server/public && mkdir ../server/public && cp -r dist/* ../server/public/
+    startCommand: npm start
+    envVars:
+      # 必填：签名密钥。免费层磁盘临时，不能依赖 server/data/auth-secret.txt 自动生成
+      - key: AUTH_SECRET
+        generateValue: true
+      # Render 服务器在海外，YouTube / Google 直连，不需要代理
+      - key: HTTP_PROXY
+        value: ''
+      # 以下按需填写（Render 面板 → 该服务 → Environment 中补）：
+      # DEEPSEEK_API_KEY   — 不填则站内 AI 降级为「用户自带 Key」模式
+      # YOUTUBE_API_KEY    — 不填则资讯中心只跑 RSS + B站
+      # SUPABASE_URL / SUPABASE_ANON_KEY — 不填则登录/云同步关闭，本地优先模式照常运行
