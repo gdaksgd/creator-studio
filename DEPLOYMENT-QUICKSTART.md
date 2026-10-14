@@ -18,6 +18,23 @@
 
 可以托管 `creator-app/dist` 做前端预览，但单独静态托管不包含 API 服务，资讯采集、AI、报告 API、账号同步等功能无法工作。需要同时部署 `server` 到支持 Node.js 的主机，并把前端 API 代理到该后端；直接放到普通静态空间不是完整部署。
 
+## 家里电脑长期在线（免费方案）
+
+线上演示跑在家用 Windows 主机 + Cloudflare Tunnel 上时，两个最常见的掉线原因是「系统睡眠」和「进程崩溃后没人拉起」。仓库内置了两件工具处理它们：
+
+1. **防睡眠**：`powercfg /change standby-timeout-ac 0`（系统不休眠；显示器仍可关闭）。
+2. **看护脚本**：`tools\watchdog.ps1` 检查后端 (:3001) 与 cloudflared 进程，谁掉了就拉起谁，并向 `logs\watchdog.log` 写一行状态。由计划任务 `CreatorStudio-Watchdog` 每 5 分钟调用。
+
+一次性配置（无需管理员）：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\register-watchdog.ps1
+```
+
+查看状态：`logs\watchdog.log` 的最后一行（`STATUS backend=True tunnel=True` 即一切正常）。
+开机自启仍由 `autostart.ps1`（启动文件夹快捷方式）负责；看护任务只负责运行中掉线的自动恢复。
+已知边界：电脑关机 / 断网 / 未登录 Windows 时，站点仍不可用——需要彻底免维护时应改用托管服务。
+
 ## 压缩包内容边界
 
 没有打包 `.env`、本地 `server/data`、日志、个人运行数据、`node_modules`、Git 历史、内置 Node/cloudflared 二进制。部署后生成自己的数据与密钥，并自行备份。
