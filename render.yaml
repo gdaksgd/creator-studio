@@ -14,6 +14,9 @@ services:
       rm -rf ../server/public && mkdir ../server/public && cp -r dist/* ../server/public/
     startCommand: npm start
     envVars:
+      # 锁定 Node 主版本，避免 Render 默认版本与依赖要求（^22）不一致
+      - key: NODE_VERSION
+        value: 22
       # 必填：签名密钥。免费层磁盘临时，不能依赖 server/data/auth-secret.txt 自动生成
       - key: AUTH_SECRET
         generateValue: true
