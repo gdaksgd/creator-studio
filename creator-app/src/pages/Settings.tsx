@@ -271,7 +271,7 @@ export default function Settings() {
       const result = await seedDemoData();
       setDemoCount(await countDemoData());
       setDemoState(getDemoState());
-      setDemoMessage(`已载入 ${result.topics} 个选题、${result.scripts} 个脚本`);
+      setDemoMessage(`已载入 ${result.topics} 个选题、${result.scripts} 个脚本、${result.briefs} 份简报、${result.experiments} 个实验`);
     } catch (err) {
       setDemoMessage('载入失败: ' + (err as Error).message);
     } finally {
@@ -802,7 +802,8 @@ export default function Settings() {
               }
             />
             <p className="mt-3 text-xs leading-relaxed text-text-muted">
-              演示数据包含 9 个选题（含已发布数据、AI 评估、素材方案与 6 份分镜脚本），
+              演示数据包含 9 个选题（含已发布数据、AI 评估、素材方案与 6 份分镜脚本）、
+              2 份版本营销简报与 2 个内容实验（均标注为「演示案例 / 非实绩」），
               只写入本机 IndexedDB，<span className="text-text">不会进入云端同步</span>，
               随时可以一键清空。第一次打开站点且本地为空时会自动载入。
             </p>

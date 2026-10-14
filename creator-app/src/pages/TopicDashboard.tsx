@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useTopicStore } from '../store/topicStore';
 import { useScriptStore } from '../store/scriptStore';
 import { api } from '../api/client';
@@ -578,6 +578,10 @@ export default function TopicDashboard() {
                 刷新发布数据
               </Button>}
             </div>
+            <p className="mt-3 text-xs text-text-muted">
+              第一次来？<Link to="/about" className="font-medium text-primary hover:underline">3 分钟导读</Link>
+              ，按策划 → 平台 → 数据的顺序看这个作品集项目。
+            </p>
           </div>
 
           <div className="grid w-full grid-cols-2 gap-x-3 gap-y-1 rounded-xl border border-border bg-bg/70 p-2 sm:p-3">

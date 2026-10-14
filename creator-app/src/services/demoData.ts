@@ -11,6 +11,9 @@ import { useTopicStore } from '../store/topicStore';
 import { useScriptStore } from '../store/scriptStore';
 import { hasToken } from './authService';
 import type {
+  CampaignPlanItem,
+  ContentExperiment,
+  GameMarketingBrief,
   MaterialPlan,
   PublishedRecord,
   Script,
@@ -50,37 +53,64 @@ async function reloadStores() {
   ]);
 }
 
-/** 当前库里的演示数据条数（选题 + 脚本） */
+/** 当前库里的演示数据条数（选题 + 脚本 + 简报 + 实验） */
 export async function countDemoData(): Promise<number> {
-  const [topics, scripts] = await Promise.all([
+  const [topics, scripts, workbench] = await Promise.all([
     db.topics.filter((t) => t.id.startsWith(DEMO_PREFIX)).count(),
     db.scripts.filter((s) => s.id.startsWith(DEMO_PREFIX)).count(),
+    db.marketingWorkbench.get('workspace'),
   ]);
-  return topics + scripts;
+  const briefs = workbench?.briefs.filter((b) => b.id.startsWith(DEMO_PREFIX)).length ?? 0;
+  const experiments =
+    workbench?.experiments.filter((e) => e.id.startsWith(DEMO_PREFIX)).length ?? 0;
+  return topics + scripts + briefs + experiments;
 }
 
-/** 清空演示数据（只删 `demo-` 前缀，真实数据不受影响） */
+/** 清空演示数据（只删 `demo-` 前缀，真实数据不受影响；营销工作台是单记录混合存储，按条目过滤） */
 export async function clearDemoData(): Promise<void> {
-  await db.transaction('rw', db.topics, db.scripts, async () => {
+  await db.transaction('rw', db.topics, db.scripts, db.marketingWorkbench, async () => {
     await db.topics.filter((t) => t.id.startsWith(DEMO_PREFIX)).delete();
     await db.scripts.filter((s) => s.id.startsWith(DEMO_PREFIX)).delete();
+    const workbench = await db.marketingWorkbench.get('workspace');
+    if (workbench) {
+      await db.marketingWorkbench.put({
+        ...workbench,
+        experiments: workbench.experiments.filter((e) => !e.id.startsWith(DEMO_PREFIX)),
+        briefs: workbench.briefs.filter((b) => !b.id.startsWith(DEMO_PREFIX)),
+        updatedAt: Date.now(),
+      });
+    }
   });
   setDemoState('off');
   await reloadStores();
 }
 
 /** 一键载入演示数据（重复点击会先清空再写入，不会变成两份） */
-export async function seedDemoData(): Promise<{ topics: number; scripts: number }> {
+export async function seedDemoData(): Promise<{
+  topics: number;
+  scripts: number;
+  briefs: number;
+  experiments: number;
+}> {
   const { topics, scripts } = buildDemoDataset(Date.now());
-  await db.transaction('rw', db.topics, db.scripts, async () => {
+  const { experiments, briefs } = buildDemoMarketing(Date.now());
+  await db.transaction('rw', db.topics, db.scripts, db.marketingWorkbench, async () => {
     await db.topics.filter((t) => t.id.startsWith(DEMO_PREFIX)).delete();
     await db.scripts.filter((s) => s.id.startsWith(DEMO_PREFIX)).delete();
+    // 营销工作台里简报/实验与真实数据混在同一条记录里：只替换 `demo-` 前缀条目
+    const workbench = await db.marketingWorkbench.get('workspace');
+    await db.marketingWorkbench.put({
+      id: 'workspace',
+      experiments: [...experiments, ...(workbench?.experiments ?? []).filter((e) => !e.id.startsWith(DEMO_PREFIX))],
+      briefs: [...briefs, ...(workbench?.briefs ?? []).filter((b) => !b.id.startsWith(DEMO_PREFIX))],
+      updatedAt: Date.now(),
+    });
     await db.topics.bulkPut(topics);
     await db.scripts.bulkPut(scripts);
   });
   setDemoState('on');
   await reloadStores();
-  return { topics: topics.length, scripts: scripts.length };
+  return { topics: topics.length, scripts: scripts.length, briefs: briefs.length, experiments: experiments.length };
 }
 
 /**
@@ -88,13 +118,37 @@ export async function seedDemoData(): Promise<{ topics: number; scripts: number 
  * 这样 HR 打开站点的第一眼看到的不是一片空白。
  */
 export async function ensureDemoData(): Promise<boolean> {
-  // 已登录（有 token）时不再自动播种：登录用户看到自己的空库是正常的，
-  // 演示数据只服务于「没登录、第一次打开」的场景。
+  // 已登录（有 token）时不再自动播种：登录用户看到自己的空库不会被塞演示数据。
   if (hasToken()) return false;
   if (getDemoState() === 'off') return false;
   const total = await db.topics.count();
-  if (total > 0) return false;
-  await seedDemoData();
+  if (total === 0) {
+    await seedDemoData();
+    return true;
+  }
+  // 老访客升级路径：此前载入过演示选题、但营销工作台还没有演示简报/实验时补齐，
+  // 保证更新上线后回访的浏览器也能在简报/实验页看到内容。
+  const demoTopics = await db.topics.filter((t) => t.id.startsWith(DEMO_PREFIX)).count();
+  if (demoTopics === 0) return false; // 本机是真实创作数据，不注入演示内容
+  return await ensureMarketingDemo();
+}
+
+/** 只补营销工作台缺的演示简报/实验；真实简报/实验原样保留。 */
+async function ensureMarketingDemo(): Promise<boolean> {
+  const workbench = await db.marketingWorkbench.get('workspace');
+  const hasDemoBrief = (workbench?.briefs ?? []).some((b) => b.id.startsWith(DEMO_PREFIX));
+  const hasDemoExperiment = (workbench?.experiments ?? []).some((e) => e.id.startsWith(DEMO_PREFIX));
+  if (hasDemoBrief && hasDemoExperiment) return false;
+  const { experiments, briefs } = buildDemoMarketing(Date.now());
+  await db.transaction('rw', db.marketingWorkbench, async () => {
+    const current = await db.marketingWorkbench.get('workspace');
+    await db.marketingWorkbench.put({
+      id: 'workspace',
+      experiments: hasDemoExperiment ? current?.experiments ?? [] : [...experiments, ...(current?.experiments ?? [])],
+      briefs: hasDemoBrief ? current?.briefs ?? [] : [...briefs, ...(current?.briefs ?? [])],
+      updatedAt: Date.now(),
+    });
+  });
   return true;
 }
 
@@ -589,4 +643,203 @@ function buildDemoDataset(now: number): { topics: Topic[]; scripts: Script[] } {
     topics: [t1, t2, t3, t4, t5, t6, t7, t8, t9],
     scripts,
   };
+}
+
+// ───────────────────────── 营销工作台演示数据（简报 + 内容实验） ─────────────────────────
+//
+// 设计原则：
+//  ★ 数据模式一律标「演示案例 / 非实绩」，与全站的数据诚实原则一致
+//  ★ 实验状态只到「进行中」：工具会把演示实验强制显示为不可判定（样本门槛），
+//    这正好向读者展示「样本不足不下结论」的守门机制，而不是绕过它
+//  ★ 简报引用的传播触点与演示选题 / 脚本互相咬合（title 里能对上的都是同一批数据）
+
+let planSeq = 0;
+function touchPoint(partial: Omit<CampaignPlanItem, 'id'>): CampaignPlanItem {
+  planSeq += 1;
+  return { id: `${DEMO_PREFIX}plan-${planSeq}`, ...partial };
+}
+
+function buildDemoMarketing(now: number): {
+  experiments: ContentExperiment[];
+  briefs: GameMarketingBrief[];
+} {
+  planSeq = 0;
+
+  // ── 实验 1：开场钩子结构。3 条已发布演示样本都挂进来，展示分组均值与混杂局限
+  const exp1: ContentExperiment = {
+    id: `${DEMO_PREFIX}exp-1`,
+    title: '开场钩子：先给结论 vs 先铺氛围',
+    hypothesis:
+      '对游戏实机类视频，开场 3 秒先抛结论或数字（「死 40 次」「180 万人」）的开头，播放表现可能好于先铺氛围的开头。',
+    variable: '开场钩子结构；品类、时长与发布平台尽量保持既有习惯（本组样本平台混杂，见结论）',
+    metric: 'views',
+    successThreshold: 100000,
+    status: 'running',
+    topicIds: [`${DEMO_PREFIX}topic-1`, `${DEMO_PREFIX}topic-2`, `${DEMO_PREFIX}topic-9`],
+    assignments: [
+      { topicId: `${DEMO_PREFIX}topic-1`, group: 'variant' },
+      { topicId: `${DEMO_PREFIX}topic-9`, group: 'variant' },
+      { topicId: `${DEMO_PREFIX}topic-2`, group: 'control' },
+    ],
+    conclusion:
+      '观察：两条「先给结论」的 B站样本均值（约 13.0 万）高于「先铺氛围」的抖音样本（9.6 万），但平台与品类同时不同，属于混杂变量，不能把差异归因于钩子结构。',
+    nextAction:
+      '下一条恐怖游戏长版沿用「先给结论」钩子并与本组同平台样本对比；抖音侧保持原结构不变，避免同时改两个变量。',
+    evidenceMode: 'demo',
+    minimumSampleSize: 3,
+    startedAt: now - 20 * DAY,
+    updatedAt: now - 4 * DAY,
+  };
+
+  // ── 实验 2：标题句式。只挂 2 条 B站样本，故意低于门槛，展示「样本不足不判定」的守门逻辑
+  const exp2: ContentExperiment = {
+    id: `${DEMO_PREFIX}exp-2`,
+    title: '标题疑问句 vs 陈述句：B站点击对比',
+    hypothesis:
+      '《科普研究》2023 的 B站研究（A 级证据）显示疑问句标题对点击有正向影响；在游戏区实测是否同样成立。',
+    variable: '标题句式（疑问句 / 陈述句）；封面与发布时间保持既有习惯',
+    metric: 'likes',
+    status: 'running',
+    topicIds: [`${DEMO_PREFIX}topic-1`, `${DEMO_PREFIX}topic-9`],
+    assignments: [
+      { topicId: `${DEMO_PREFIX}topic-1`, group: 'variant' },
+      { topicId: `${DEMO_PREFIX}topic-9`, group: 'control' },
+    ],
+    conclusion:
+      '样本 2 条，低于最低样本数 3，暂不判定。当前点赞观察：疑问句样本 1.24 万 vs 陈述句样本 0.52 万，仅作记录，不作为结论引用。',
+    nextAction:
+      '下一条 B站长版发布时用疑问句标题，回填数据凑满 3 条样本后再复盘；在此之前不改封面等其他变量。',
+    evidenceMode: 'demo',
+    minimumSampleSize: 3,
+    startedAt: now - 30 * DAY,
+    updatedAt: now - 4 * DAY,
+  };
+
+  // ── 简报 1：寂静岭 f 发售期传播计划（与已发布的抖音演示选题 t2 对应）
+  const brief1: GameMarketingBrief = {
+    id: `${DEMO_PREFIX}brief-1`,
+    title: '寂静岭 f · 发售期「惊吓密度实测」传播计划',
+    gameTitle: '寂静岭 f（Silent Hill f）',
+    versionName: '全球发售窗口',
+    objective:
+      '在恐怖新品发售窗口建立「量化惊吓密度」的内容差异点，服务不敢盲买的观望玩家与云玩家：让「吓不吓人、值不值得首发入」有一个可引用的实测答案。业务目标：发售首两周内成为「寂静岭 f 实测」相关搜索的高相关结果，并为恐怖品类沉淀一个可复用的栏目形制。',
+    targetAudience:
+      '系列老粉与恐怖游戏爱好者：一部分是「想玩但不敢独自玩」的云玩家，一部分在观望首发是否值得入手；两类人共同的决策问题是「到底有多吓人」。',
+    audienceInsight:
+      '本站分析报告显示恐怖品类是 B站游戏区当前播放水位最高的品类（播放中位 147.7 万，n=30，快照口径，不能外推全体）；同类视频评论区高频问题集中在「吓不吓人」「要不要首发买」。待验证假设：把 jump scare 次数做成可计数的角标，能同时服务云玩家（安心看）与老粉（判断强度）。',
+    keySellingPoints: [
+      '前 90 分钟被吓 11 次：把「吓人程度」量化成可截图传播的数字',
+      '老版 vs 新版氛围分屏对比：给系列老粉的判断依据',
+      '第 2 秒第一个惊吓点：短版切片直接前置高潮',
+    ],
+    evidenceNotes:
+      '官方发售公告与试玩报道（公开资料）；品类水位来自本站分析报告（自采样快照，A 级口径）；「第 2 秒惊吓点」为个人经验假设，发布后依评论区反馈修正。',
+    budgetNote:
+      '个人创作者：无买量预算，制作窗口 48 小时；素材为自录实机画面，剪辑需避免纯 jump scare 堆砌带来的观感风险。',
+    successDefinition:
+      '上线后 7 天回填数据：抖音短版播放 ≥ 10 万（触点预设目标，非预测）；长版评论区收集到 ≥ 20 条有效购买决策讨论。目标值为预设，实际以复盘为准。',
+    plan: [
+      touchPoint({
+        phase: 'teaser',
+        publishAt: now - 22 * DAY,
+        channel: 'B站动态 + 抖音',
+        contentAngle: '发售倒计时：这作凭什么让系列老粉等了 13 年——逐帧拆预告片里的怪设计与心理恐怖基调',
+        targetMetric: '动态互动',
+        targetValue: 500,
+        status: 'published',
+      }),
+      touchPoint({
+        phase: 'launch',
+        publishAt: now - 20 * DAY,
+        channel: '抖音',
+        contentAngle: '短版切片《前 90 分钟被吓 11 次》：惊吓点计数角标 + 老新版分屏，高潮前置到第 2 秒',
+        targetMetric: '播放',
+        targetValue: 100000,
+        status: 'published',
+        linkedTopicId: `${DEMO_PREFIX}topic-2`,
+      }),
+      touchPoint({
+        phase: 'launch',
+        publishAt: now - 19 * DAY,
+        channel: 'B站',
+        contentAngle: '长版完整实测：惊吓点逐个标注时间戳，结尾给「首发 / 观望 / 云」三类人群各自的购买建议',
+        targetMetric: '播放',
+        targetValue: 80000,
+        status: 'planned',
+      }),
+      touchPoint({
+        phase: 'sustain',
+        publishAt: now - 6 * DAY,
+        channel: 'B站 + 社群',
+        contentAngle: '汇总评论区高频问题做「值不值得买」追踪一期，把购买决策讨论沉淀成固定栏目',
+        targetMetric: '涨粉',
+        status: 'planned',
+      }),
+    ],
+    retrospective:
+      '演示复盘：抖音短版实际播放 9.6 万，高于 AI 预测（8 万）20%，低于触点预设目标（10 万）4%；「数吓了几次」成为评论区记忆点，量化角标的方向得到初步印证——但样本只有 1 条，不构成结论。B站长版尚未发布，发布后补充同渠道对照。',
+    linkedExperimentId: `${DEMO_PREFIX}exp-1`,
+    dataMode: 'demo',
+    createdAt: now - 24 * DAY,
+    updatedAt: now - 4 * DAY,
+  };
+
+  // ── 简报 2：星露谷 1.7 更新解读计划（与调研中的选题 t8 对应，尚未执行所以无复盘）
+  const brief2: GameMarketingBrief = {
+    id: `${DEMO_PREFIX}brief-2`,
+    title: '星露谷物语 1.7 · 更新解读内容计划',
+    gameTitle: '星露谷物语（Stardew Valley）',
+    versionName: '1.7 更新',
+    objective:
+      '抢「更新公告解读」的时效窗口：公告发布后 24 小时内发布逐条解读，重点回答官方公告不直接回答的问题——「现有存档还能不能玩」。目标：让这条视频成为本账号在模拟经营品类的第一条过 5 万播放的内容（品类水位参考线，预设目标非预测）。',
+    targetAudience:
+      '有存档的老玩家（担心更新破坏存档）、考虑回坑的流失玩家（想知道 1.7 值不值得回坑）；前者决定首发互动，后者决定长尾搜索。',
+    audienceInsight:
+      '公告解读类内容的时效窗口约 48 小时，搜索意图集中在「改动列表」「存档兼容」；官方公告通常不覆盖存档影响，社区 Wiki 更新有滞后（来源：过往版本更新期的观察，经验假设，待本次发布验证）。',
+    keySellingPoints: [
+      '逐条标注「对现有存档的影响」——公告没写的部分实机验证后补充',
+      '回坑成本一图流：可继承 / 需重开 / 受影响玩法',
+      '节庆与 NPC 内容变化对照表',
+    ],
+    evidenceNotes:
+      '官方更新公告（待发布，发布后逐条核对）；模拟经营品类水位来自本站分析报告（播放中位 52.9 万，n=30，自采样快照）；存档影响判断以实机测试为准，发布前先标注「待验证」。',
+    budgetNote: '个人创作者：时效内容把制作时长压在 24 小时内；无额外预算，素材以公告截图 + 实机验证为主。',
+    successDefinition:
+      '发布后 7 天播放 ≥ 5 万（模拟经营品类水位线的自定义参考，非行业标准）；评论区收集 ≥ 15 个存档相关问题，回填进选题池作为后续选题。',
+    plan: [
+      touchPoint({
+        phase: 'teaser',
+        publishAt: now + 2 * DAY,
+        channel: 'B站动态',
+        contentAngle: '更新倒计时投票：你最关心 1.7 的哪个改动——用投票结果决定解读的侧重顺序',
+        targetMetric: '投票参与',
+        targetValue: 300,
+        status: 'planned',
+      }),
+      touchPoint({
+        phase: 'launch',
+        publishAt: now + 4 * DAY,
+        channel: 'B站',
+        contentAngle: '逐条解读公告：每个改动标注「对存档的影响」，结尾给回坑 / 观望 / 重开三类建议',
+        targetMetric: '播放',
+        targetValue: 50000,
+        status: 'planned',
+        linkedTopicId: `${DEMO_PREFIX}topic-8`,
+      }),
+      touchPoint({
+        phase: 'sustain',
+        publishAt: now + 11 * DAY,
+        channel: 'B站 + 抖音',
+        contentAngle: '存档迁移指南：回答评论区高频问题，做成可长尾搜索的攻略向内容',
+        targetMetric: '搜索流量',
+        status: 'planned',
+      }),
+    ],
+    retrospective: '',
+    dataMode: 'demo',
+    createdAt: now - 3 * DAY,
+    updatedAt: now - 1 * DAY,
+  };
+
+  return { experiments: [exp1, exp2], briefs: [brief1, brief2] };
 }

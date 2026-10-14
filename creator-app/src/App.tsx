@@ -16,6 +16,7 @@ const Report = lazy(() => import('./pages/Report'))
 const Settings = lazy(() => import('./pages/Settings'))
 const ContentExperiments = lazy(() => import('./pages/ContentExperiments'))
 const MarketingBriefs = lazy(() => import('./pages/MarketingBriefs'))
+const About = lazy(() => import('./pages/About'))
 
 function App() {
   useEffect(() => {
@@ -45,6 +46,7 @@ function App() {
         <Route path="/library" element={<MaterialLibrary />} />
         <Route path="/experiments" element={<ContentExperiments />} />
         <Route path="/marketing-briefs" element={<MarketingBriefs />} />
+        <Route path="/about" element={<About />} />
         <Route path="/settings" element={<Settings />} />
       </Route>
     </Routes>
