@@ -17,7 +17,6 @@
 # ============================================================
 
 $root     = Split-Path -Parent $PSScriptRoot
-$script   = Join-Path $PSScriptRoot 'watchdog.ps1'
 $taskName = 'CreatorStudio-Watchdog'
 
 Write-Host '== 1/2  power: stay awake on AC =='
@@ -44,7 +43,16 @@ if ($ac -ne '0x00000000') {
 Write-Host '== 2/2  register the watchdog task =='
 # schtasks is used on purpose: New-ScheduledTaskTrigger -RepetitionDuration MaxValue
 # produces an out-of-range Duration (P99999999DT23H59M59S) on current Windows builds.
-$tr = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $script
+#
+# The action goes through wscript.exe + watchdog-hidden.vbs on purpose:
+# launching powershell.exe directly from Task Scheduler always flashes a
+# console window (the console is created before -WindowStyle Hidden is read).
+$vbs = Join-Path $PSScriptRoot 'watchdog-hidden.vbs'
+if (-not (Test-Path -LiteralPath $vbs)) {
+    Write-Host ("     [ERROR] missing {0}" -f $vbs)
+    exit 1
+}
+$tr = 'wscript.exe "{0}"' -f $vbs
 $out = schtasks.exe /Create /F /SC MINUTE /MO 5 /TN $taskName /TR $tr 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host ("     [ERROR] schtasks failed: {0}" -f ($out -join ' '))
