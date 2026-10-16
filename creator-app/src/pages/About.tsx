@@ -4,17 +4,19 @@ import {
   FileText,
   FileUser,
   FlaskConical,
+  LayoutDashboard,
   Mail,
   Megaphone,
   type LucideIcon,
 } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { PageHeader, SectionHeading } from '../components/ui/PageHeader';
+import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { CONTACT } from '../config/contact';
 
 /**
- * 关于 / 项目介绍 —— 给第一次打开站点的人一条 3 分钟的浏览路线。
+ * 关于 / 项目介绍 —— 第一次打开站点的访客默认先看到这一页（见 utils/firstVisit.ts）。
  * 这个应用本身是工具界面，没有这一页的话，访客不知道该看什么、也不知道作者是谁。
  */
 
@@ -53,12 +55,20 @@ const TOUR: TourStop[] = [
 ];
 
 export default function About() {
+  const navigate = useNavigate();
+
   return (
     <div className="space-y-5">
       <PageHeader
         eyebrow="关于 / 项目介绍"
         title="3 分钟了解这个项目"
         description="这是一个自媒体创作工具：不是「做了一个网站」，而是把内容判断沉淀成一套可复核的工作流。下面是推荐的浏览顺序。"
+        actions={
+          <Button size="lg" onClick={() => navigate('/')}>
+            <LayoutDashboard className="h-4 w-4" aria-hidden="true" />
+            进入工作台
+          </Button>
+        }
       />
 
       <Card padding="lg" className="space-y-4">
