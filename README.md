@@ -3,15 +3,21 @@
 **在线体验**：**[https://creator.creator-app.xyz](https://creator.creator-app.xyz)**
 **代码**：[github.com/gdaksgd/creator-studio](https://github.com/gdaksgd/creator-studio)，仓库保留了 `v1.0.0` → `v1.5.2` 的历史版本快照，可用于对照版本演进。
 
+[![CI](https://github.com/gdaksgd/creator-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/gdaksgd/creator-studio/actions/workflows/ci.yml)
+
 ## 界面速览
 
-| 选题看板：热点评分与选题池 | 脚本编辑：按平台给出适配结论（B站/抖音结论不同） |
+| 门户页：第一次打开先看项目介绍 | 选题看板：热点评分与选题池 |
 |---|---|
-| ![选题看板](docs/screenshots/dashboard.png) | ![平台适配检查](docs/screenshots/platform-check.png) |
+| ![门户页](docs/screenshots/portal.png) | ![选题看板](docs/screenshots/dashboard.png) |
 
-| 版本营销简报：目标、受众、卖点与传播节奏 | 分析报告：每个数字都带来源与样本量 |
+| 脚本编辑：按平台给出适配结论（B站/抖音结论不同） | 分析报告：每个数字都带来源与样本量 |
 |---|---|
-| ![版本营销简报](docs/screenshots/marketing-briefs.png) | ![分析报告](docs/screenshots/report.png) |
+| ![平台适配检查](docs/screenshots/platform-check.png) | ![分析报告](docs/screenshots/report.png) |
+
+| 版本营销简报：目标、受众、卖点与传播节奏 | 更多界面 |
+|---|---|
+| ![版本营销简报](docs/screenshots/marketing-briefs.png) | 数据看板 / 内容实验 / 素材库等页面可在 **[在线体验](https://creator.creator-app.xyz)** 里直接打开，演示数据已就绪。 |
 
 ## 项目速览
 
