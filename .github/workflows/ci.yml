@@ -1,0 +1,35 @@
+# 每次 push / PR 自动执行：hooks 顺序体检 → 类型检查 → 生产构建。
+# 与本地 build.ps1 的前三步保持一致，作用是把「改坏了」挡在推送阶段。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: creator-app/package-lock.json
+
+      - name: React hooks audit
+        run: node tools/hooks-audit.mjs
+
+      - name: Install frontend deps
+        working-directory: creator-app
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: creator-app
+        run: npx tsc -b
+
+      - name: Build
+        working-directory: creator-app
+        run: npx vite build
