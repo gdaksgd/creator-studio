@@ -3,6 +3,16 @@
 **在线体验**：**[https://creator.creator-app.xyz](https://creator.creator-app.xyz)**（可用性与账号/云同步能力取决于当前部署配置）
 **代码**：[github.com/gdaksgd/creator-studio](https://github.com/gdaksgd/creator-studio)，仓库保留了 `v1.0.0` → `v1.5.2` 的历史版本快照，可用于对照版本演进。
 
+## 界面速览
+
+| 选题看板：热点评分与选题池 | 脚本编辑：按平台给出适配结论（B站/抖音结论不同） |
+|---|---|
+| ![选题看板](docs/screenshots/dashboard.png) | ![平台适配检查](docs/screenshots/platform-check.png) |
+
+| 版本营销简报：目标、受众、卖点与传播节奏 | 分析报告：每个数字都带来源与样本量 |
+|---|---|
+| ![版本营销简报](docs/screenshots/marketing-briefs.png) | ![分析报告](docs/screenshots/report.png) |
+
 ## 项目速览
 
 | 项目维度 | 项目中的代表性内容 | 阅读口径 |
@@ -15,6 +25,7 @@
 
 ## 目录
 
+- [界面速览](#界面速览)
 - [项目速览](#项目速览)
 - [Creator Studio 项目](#creator-studio-项目)
 - [目标岗位能力映射](#目标岗位能力映射)
