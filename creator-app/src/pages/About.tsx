@@ -1,6 +1,5 @@
 import {
   CodeXml,
-  Compass,
   FileChartColumn,
   FileText,
   FileUser,
@@ -12,7 +11,6 @@ import {
 import { Link } from 'react-router-dom';
 import { PageHeader, SectionHeading } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
-import { Badge } from '../components/ui/Badge';
 import { CONTACT } from '../config/contact';
 
 /**
@@ -60,13 +58,7 @@ export default function About() {
       <PageHeader
         eyebrow="关于 / 项目介绍"
         title="3 分钟了解这个项目"
-        description="这是一个内容营销方向的作品集项目：不是「做了一个网站」，而是把内容判断沉淀成一套可复核的工作流。下面是推荐的浏览顺序。"
-        actions={
-          <Badge variant="primary" size="md" className="gap-1.5">
-            <Compass className="h-3.5 w-3.5" aria-hidden="true" />
-            {CONTACT.tagline}
-          </Badge>
-        }
+        description="这是一个作品集项目：不是「做了一个网站」，而是把内容判断沉淀成一套可复核的工作流。下面是推荐的浏览顺序。"
       />
 
       <Card padding="lg" className="space-y-4">
@@ -116,10 +108,7 @@ export default function About() {
 
       <Card padding="lg" className="space-y-3">
         <SectionHeading title="联系我" hint="源码、提交历史与完整 README 都在 GitHub" />
-        <p className="text-sm leading-relaxed text-text">
-          <span className="font-semibold">{CONTACT.name}</span>
-          <span className="text-text-secondary"> · {CONTACT.tagline}</span>
-        </p>
+        <p className="text-sm font-semibold text-text">{CONTACT.name}</p>
         <div className="flex flex-wrap gap-2.5">
           <a
             href={CONTACT.github}

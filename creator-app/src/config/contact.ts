@@ -10,8 +10,6 @@ export const CONTACT = {
   name: '李泓博',
   /** 关于页署名（展示用，可用常用昵称） */
   displayName: 'gdaksgd',
-  /** 一句话自我定位，显示在关于页署名下方 */
-  tagline: '内容营销 / 游戏营销策划方向',
   /** 项目仓库地址（作品集语境下指向仓库比个人主页更直接） */
   github: 'https://github.com/gdaksgd/creator-studio',
   /** 求职邮箱；留空则不在页面显示邮箱入口 */
