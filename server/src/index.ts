@@ -175,6 +175,9 @@ if (fs.existsSync(frontendDist)) {
     setHeaders: (res, filePath) => {
       if (/[\\/]assets[\\/]/.test(filePath)) {
         res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      } else if (/[\\/]shots[\\/]/.test(filePath) || /[\\/]logo\.png$/.test(filePath)) {
+        // 门户截图与 logo 变动不频繁：给一天缓存，避免每次访问都要经隧道回源校验一遍
+        res.setHeader('Cache-Control', 'public, max-age=86400');
       } else {
         res.setHeader('Cache-Control', 'no-cache');
       }

@@ -261,7 +261,7 @@ function HeroShot() {
           </span>
         </div>
         <img
-          src="/shots/dashboard.png"
+          src="/shots/dashboard.webp"
           alt="选题看板界面：热点评分、选题池与本地指标"
           width={1440}
           height={900}
@@ -524,7 +524,7 @@ export default function Portal() {
           <div className="grid gap-4 lg:grid-cols-2">
             <Reveal className="h-full">
               <ShowcaseFigure
-                src="/shots/report.png"
+                src="/shots/report.webp"
                 alt="分析报告界面：品类竞争、时长与互动率等维度的数字都带来源与样本量"
                 path="/report"
                 title="分析报告"
@@ -533,7 +533,7 @@ export default function Portal() {
             </Reveal>
             <Reveal delay={90} className="h-full">
               <ShowcaseFigure
-                src="/shots/marketing-briefs.png"
+                src="/shots/marketing-briefs.webp"
                 alt="版本营销简报界面：目标、受众、卖点依据与预热上线长尾节奏"
                 path="/marketing-briefs"
                 title="版本营销简报"
