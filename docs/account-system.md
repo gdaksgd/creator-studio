@@ -167,3 +167,43 @@ npx.cmd tsx scripts/cloud-admin.ts rewrite                    # 原样写回（�
 **验收（2026-10-12）**：`D:\wp\_ai-config-probe.mjs` 在线上后端 `http://127.0.0.1:3001`
 dummy 阶段 **12/12**、real 阶段 **4/4**（含匿名 401、掩码不含明文、假 Key 时 `aiUsed:false`、
 真 Key 时 `aiUsed:true`、清空后回落到 `aiSource:'server'`）。
+
+## 11. 数据面反代与可观测性加固（2026-10-14）
+
+**现象**：换一台电脑打开公网域名登录——页面正常、登录框正常，点「登录」必现「连不上服务器，请稍后再试」。
+本机（跑后端那台）也必现，且故障期内**凭据正确也一样失败**。
+
+**根因**：本机到 `*.supabase.co` 的 TLS 被网络侧按**后缀**重置（`curl (35) Recv failure: Connection was reset`），
+于是 `authStore.ts:227` 的 `await readCloud()`（登录时先读云端再找用户）直接抛
+`CloudError(502,'CLOUD_ERROR','云端查询失败: TypeError: fetch failed')`，
+前端 `messageForError()` 的兜底桶又把它显示成「连不上服务器」——**文案误导，故障其实在数据面**。
+定位手法：`curl --connect-to creator.creator-app.xyz:443:<同一个 Cloudflare IP>` → 200 / tls=0.37s
+（换 SNI 就通，说明掐 SNI 不掐 IP）；`zzz-made-up-probe-name.supabase.co` 同样被 RST（后缀级）而
+`api.supabase.com`、`aws-0-us-east-1.pooler.supabase.com` 的 TLS 正常。
+
+**修复**：数据面改走自己的域名 + Cloudflare Worker 哑管道（原理 / 证据 / 回滚见 `tools\supabase-proxy\README.md`）：
+`server\.env` 的 `SUPABASE_URL=https://creator.creator-app.xyz/api/cs-cloud`，
+Workers Route `creator.creator-app.xyz/api/cs-cloud/*` → 脚本 `cs-supabase-proxy` → `<ref>.supabase.co`。
+后端无需改代码（URL 走配置），前端不感知。
+
+| 复测项 | 结果 |
+| --- | --- |
+| 本机 / 公网 `POST /api/auth/login`（真实账号 + 错密码） | **401 BAD_CREDENTIALS**（故障期是 502 / 7.8s，现在 1.5s） |
+| 公网注册 → 正确密码登录 → `cloud-admin.ts prune-prefix` | 201 / 200 / 清掉 1 个临时账号，用户数据未动 |
+| `cloud-admin.ts stats` | 正常（2 个账号，行级 `uploaded_at` = 2026-10-12T14:40:05Z） |
+| `tools\smoke-test.ps1` 本机 / 公网 | **33/33** / **66/66** |
+
+**顺带加固**（原本就在待办里的四项）：
+
+| 项 | 位置 | 内容 |
+| --- | --- | --- |
+| 请求日志 | `server/src/index.ts`（`trust proxy` 之后） | `res.on('finish')` 打 `[req] <ISO> <method> <url> <status> <ms> ip=<req.ip> cf=<cf-connecting-ip>`；此前 `logs/backend.out.log` 恒为 0 字节，线上故障无从查证 |
+| 云端读重试 | `server/src/services/cloudStore.ts` `fetchCloud()` | 3 次尝试、间隔 300 / 900 ms，失败打 `[cloud] read failed (n/3)`，最后一次才抛 502 |
+| 前端超时 + GET 重试 | `creator-app/src/api/client.ts` | `REQUEST_TIMEOUT_MS=20000`（AbortController）+ GET 失败重试 1 次（5xx，或非超时的网络错误） |
+| 诚实文案 | `creator-app/src/services/authService.ts:51-57` | 502 `CLOUD_ERROR`、超时、断网、429、5xx 各自一句，兜底才说「连不上服务器」 |
+
+**已知副作用与运维注意**：
+1. 后端到云端多了一跳（实测读一次 `app_sync` 约 0.6–1.7s）；反代不可用时表现是登录 / 同步 502 `CLOUD_ERROR`，本地功能不受影响。
+2. 部署机解析器 `192.168.252.11` 对**新创建的子域**返回 NXDOMAIN（上游激进否定缓存 / NSEC，约 30 分钟才失效，
+   `ipconfig /flushdns` 无效）——所以后端用的是「已能解析的主机名 + 路径前缀」入口，新增子域请预留这段时间。
+3. 改 `server\src` 或 `.env` 后必须重启后端（生产用的 `tsx` 不带 watch）；重启**不要**用 `stop.ps1`（它会连 cloudflared 一起杀）。

@@ -45,14 +45,23 @@ function isUnauthorized(err: unknown): boolean {
 
 /**
  * 按后端 business code 出中文文案（Settings 页直接显示 store.error）。
- * 409 USERNAME_TAKEN / 401 BAD_CREDENTIALS / 503 NOT_CONFIGURED 三类单独说清楚，
- * 其余（含网络不通）统一提示稍后再试，不把「服务器没配」说成「用户填错了」。
+ * 关键原则：文案必须说实话 —— 把「服务端到云端的通道断了」「超时」「限流」分开说，
+ * 否则一次云端读故障会被用户理解成「我用户名密码错了」或「我这台电脑网络不好」。
+ * 2026-10-14 的线上故障就是 CLOUD_ERROR 被兜底成「连不上服务器，请稍后再试」，
+ * 让人误以为是客户端网络问题。
  */
 function messageForError(err: unknown): string {
   const code = errorCode(err);
   if (code === 'USERNAME_TAKEN') return '这个用户名已经被注册了';
   if (code === 'BAD_CREDENTIALS') return '用户名或密码不对';
   if (code === 'NOT_CONFIGURED') return '服务器的云账号功能没配置好（缺少 Supabase 配置）';
+  if (code === 'CLOUD_ERROR') return '云端数据服务暂时读不到（服务端到云端的通道断了），本地功能不受影响，请稍后重试';
+  if (code === 'TIMEOUT') return '请求超时了，网络可能不稳，请再试一次';
+  if (err instanceof ApiError) {
+    if (err.status === 0) return '网络请求发不出去，请检查网络后重试';
+    if (err.status === 429) return '操作太频繁了，请等一分钟再试';
+    if (err.status >= 500) return '服务器出错了，请稍后重试';
+  }
   return '连不上服务器，请稍后再试';
 }
 

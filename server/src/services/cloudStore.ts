@@ -240,29 +240,49 @@ let readInFlight: Promise<CloudSnapshot> | null = null;
 /** 每次写云端自增：用来丢弃「写入前发出、写入后才回来」的读，避免刚写完就读到旧快照 */
 let readGeneration = 0;
 
-/** 真去云端取一次，不做任何进程内缓存 */
+/**
+ * 云端读的重试参数。
+ * 2026-10-14 的故障里 `TypeError: fetch failed`（TCP 通、TLS 被重置）是唯一错误形态，
+ * 一次失败就让登录/注册/sync 全部 502，所以这里做等间隔递增的短重试：
+ * 抖动（几百毫秒级）能自愈，持续性故障仍然如实报 502，不假装成功。
+ */
+const READ_ATTEMPTS = 3;
+const READ_RETRY_DELAYS_MS = [300, 900];
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** 真去云端取一次（内部含短重试），不做任何进程内缓存 */
 async function fetchCloud(): Promise<CloudSnapshot> {
   assertConfigured();
-  const { data, error } = await supabase!
-    .from(SYNC_TABLE)
-    .select('data, uploaded_at')
-    .eq('id', 1)
-    .maybeSingle();
 
-  if (error) {
-    console.error('[cloud] read failed:', error.message);
-    throw new CloudError(502, 'CLOUD_ERROR', '云端查询失败: ' + error.message);
+  for (let attempt = 1; ; attempt += 1) {
+    const { data, error } = await supabase!
+      .from(SYNC_TABLE)
+      .select('data, uploaded_at')
+      .eq('id', 1)
+      .maybeSingle();
+
+    if (error) {
+      console.error(`[cloud] read failed (${attempt}/${READ_ATTEMPTS}):`, error.message);
+      if (attempt >= READ_ATTEMPTS) {
+        throw new CloudError(502, 'CLOUD_ERROR', '云端查询失败: ' + error.message);
+      }
+      await sleep(READ_RETRY_DELAYS_MS[attempt - 1] ?? 900);
+      continue;
+    }
+
+    if (!data) {
+      return { blob: emptyBlob(), uploadedAt: 0, empty: true };
+    }
+
+    const row = data as Record<string, unknown>;
+    const blob = normalizeBlob(row.data);
+    const uploadedAt = asNumber(row.uploaded_at, 0);
+    const empty = blob.users.length === 0 && Object.keys(blob.accounts).length === 0 && !blob.legacy;
+    return { blob, uploadedAt, empty };
   }
-
-  if (!data) {
-    return { blob: emptyBlob(), uploadedAt: 0, empty: true };
-  }
-
-  const row = data as Record<string, unknown>;
-  const blob = normalizeBlob(row.data);
-  const uploadedAt = asNumber(row.uploaded_at, 0);
-  const empty = blob.users.length === 0 && Object.keys(blob.accounts).length === 0 && !blob.legacy;
-  return { blob, uploadedAt, empty };
 }
 
 /** 读云端那一行（进程内单飞 + 1.5 秒缓存）。表里没行时返回空 blob（不是错误） */

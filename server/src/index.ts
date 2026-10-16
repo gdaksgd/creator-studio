@@ -24,6 +24,21 @@ const app = express();
 // 前面是 Cloudflare Tunnel，必须信任一层代理，req.ip 才能拿到真实客户端 IP
 app.set('trust proxy', 1);
 
+// 请求日志：此前服务端一行日志都不写，线上出问题只能靠猜（logs/backend.out.log 一直是 0 字节）。
+// 打在响应结束时，含状态码与耗时；cf 是 Cloudflare 透传的真实客户端 IP（排查「某台电脑连不上」靠它）。
+app.use((req, res, next) => {
+  const started = process.hrtime.bigint();
+  res.on('finish', () => {
+    const ms = Number(process.hrtime.bigint() - started) / 1e6;
+    const cfIp = (req.headers['cf-connecting-ip'] as string | undefined) || '-';
+    const url = req.originalUrl.length > 200 ? req.originalUrl.slice(0, 200) + '…' : req.originalUrl;
+    console.log(
+      `[req] ${new Date().toISOString()} ${req.method} ${url} ${res.statusCode} ${ms.toFixed(1)}ms ip=${req.ip || '-'} cf=${cfIp}`
+    );
+  });
+  next();
+});
+
 // 只允许本地开发端口 + 同源请求；无 Origin 头的请求（curl 等）放行
 const DEV_ORIGINS = new Set(['http://localhost:5173', 'http://127.0.0.1:5173']);
 

@@ -452,6 +452,20 @@ cloudflared tunnel list              # 隧道列表
 cloudflared tunnel info creator-studio   # 连通状态
 ```
 
+### 数据面反代（Supabase 走 Worker）
+
+2026-10-14 起，本机到 `*.supabase.co` 的 TLS 被网络侧按后缀重置（`curl (35) Recv failure: Connection was reset`，
+换 SNI 打同一个 Cloudflare IP 却正常），数据面于是改走自己的域名：
+
+```
+server (Express) --HTTPS--> creator.creator-app.xyz/api/cs-cloud/*  --Workers Route-->  Worker cs-supabase-proxy  -->  <ref>.supabase.co
+```
+
+- 服务端地址：`server\.env` → `SUPABASE_URL=https://creator.creator-app.xyz/api/cs-cloud`
+- 部署/复测（幂等，可重复跑）：`powershell -ExecutionPolicy Bypass -File tools\supabase-proxy\deploy.ps1 -ApiToken <TOKEN>`
+- 原理、证据、回滚与已知取舍：`tools\supabase-proxy\README.md`
+- 回滚：把 `SUPABASE_URL` 换回 `https://swuwkemyffuraloijrse.supabase.co` 并重启后端
+
 ### 每日任务
 
 | 任务 | 时间 | 脚本 | 日志 |
@@ -475,6 +489,12 @@ schtasks /run   /tn "CreatorStudio-SupabaseKeepAlive"
 
 **Q：改了代码怎么上线？**
 按项目部署流程构建并发布；本地开发服务器不等同于线上环境，发布后需验证静态资源、API 和目标页面。
+
+**Q：登录时提示「连不上服务器，请稍后再试」？**
+先看 `logs\backend.out.log` 里的 `[req]` 行（每个请求都带状态码与耗时）。再按状态码区分：
+502 `CLOUD_ERROR` = 服务端到 Supabase 的通道断了（本机曾因网络封锁 `*.supabase.co` 而必现，见「数据面反代」一节）；
+401 `BAD_CREDENTIALS` = 用户名或密码不对；429 = 同一 IP 一分钟内登录超过 12 次。
+前端文案已按状态码分开，不再把所有失败都显示成同一句「连不上服务器」。
 
 **Q：同步提示冲突 / 数据没同步上去？**
 这是保护机制生效——云端有更新的数据，前端会自动改为下载云端版本。若确认要以本机为准，在浏览器控制台执行 `localStorage.removeItem('lastSyncAt')` 后重新同步。
@@ -503,6 +523,7 @@ schtasks /run   /tn "CreatorStudio-SupabaseKeepAlive"
 - **封面检查只读文案，不分析像素**：需要图像处理依赖才能做的部分（清晰度/色彩/亮度）明确不做，面板里也写明了
 - **发布后指标不在这里判断**：CTR 与完播率都要真实发布数据，B站/抖音 都没有公开接口；v1.5.2 起这两项连同「计划更新频率」一起从平台适配检查里删除——它们属于数据看板与报告，不属于写脚本时的检查
 - **AI 依赖外部 API**：大模型不可用时 AI 相关功能降级，其余功能不受影响
+- **数据面多了一跳反代**：后端 → Cloudflare 边缘 → Supabase（本机直连 `*.supabase.co` 被网络侧按后缀重置）。反代或 Worker 出问题时的表现是登录 / 同步返回 502 `CLOUD_ERROR`，本地功能不受影响；`tools\supabase-proxy\README.md` 有复测命令
 
 ---
 

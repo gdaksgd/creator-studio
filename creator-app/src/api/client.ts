@@ -51,7 +51,27 @@ function readAuthToken(): string | null {
   }
 }
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
+/**
+ * 单次请求的超时。走 Cloudflare 隧道时实测 1.2～11.7 秒，20 秒足够宽裕，
+ * 又不至于让界面在链路挂掉时无限转圈（以前没有超时，请求会一直挂着）。
+ */
+const REQUEST_TIMEOUT_MS = 20000;
+/** 只对幂等的 GET 重试一次：链路抖动可自愈，写请求绝不自动重放（避免重复写入）。 */
+const GET_RETRY_DELAY_MS = 700;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * 发一次请求：带超时，并把网络层失败归一成 ApiError(status=0)，
+ * 这样上层文案能区分「真的连不上」和「服务器/云端出错」，而不是全部笼统说一句连不上。
+ */
+async function requestOnce<T>(
+  path: string,
+  options: RequestInit | undefined,
+  method: string
+): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
@@ -67,10 +87,24 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     headers.Authorization = `Bearer ${token}`;
   }
 
-  const resp = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers,
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let resp: Response;
+  try {
+    resp = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      method,
+      headers,
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (controller.signal.aborted) {
+      throw new ApiError(`请求超时（${REQUEST_TIMEOUT_MS / 1000} 秒无响应）`, 0, 'TIMEOUT');
+    }
+    throw new ApiError('网络请求失败', 0, 'NETWORK');
+  } finally {
+    clearTimeout(timer);
+  }
 
   if (!resp.ok) {
     const body = await resp.json().catch(() => ({ error: resp.statusText }));
@@ -78,6 +112,23 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   }
 
   return resp.json();
+}
+
+async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const method = (options?.method || 'GET').toUpperCase();
+  const attempts = method === 'GET' ? 2 : 1;
+
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await requestOnce<T>(path, options, method);
+    } catch (err) {
+      const retryable =
+        err instanceof ApiError &&
+        (err.status >= 500 || (err.status === 0 && err.code !== 'TIMEOUT'));
+      if (attempt >= attempts || !retryable) throw err;
+      await sleep(GET_RETRY_DELAY_MS);
+    }
+  }
 }
 
 export interface NewsItem {
