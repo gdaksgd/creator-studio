@@ -1,9 +1,10 @@
 import { Suspense, useEffect, useState } from 'react';
-import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   Bookmark,
   ChartColumn,
   Compass,
+  DoorOpen,
   FlaskConical,
   Megaphone,
   FileChartColumn,
@@ -205,6 +206,15 @@ function SidebarContent() {
       <div className="flex flex-col gap-3 border-t border-border px-1 pt-4">
         <div className="flex items-center justify-between gap-2">
           <span className="px-1 text-[11px] text-text-muted">创作者工作空间</span>
+          {/* 低调的返回入口：让访客随时能回到门户页（/welcome） */}
+          <Link
+            to="/welcome"
+            title="返回门户页"
+            className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-text-muted transition-colors hover:bg-surface-hover hover:text-text"
+          >
+            <DoorOpen className="h-3.5 w-3.5" aria-hidden="true" />
+            门户页
+          </Link>
         </div>
       </div>
     </div>

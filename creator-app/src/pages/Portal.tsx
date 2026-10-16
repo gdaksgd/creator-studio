@@ -367,6 +367,10 @@ export default function Portal() {
   const [scrolled, setScrolled] = useState(false);
 
   useEffect(() => {
+    document.title = 'Creator Studio · 内容工作台';
+  }, []);
+
+  useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 12);
     onScroll();
     window.addEventListener('scroll', onScroll, { passive: true });
