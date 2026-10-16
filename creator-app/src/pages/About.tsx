@@ -58,7 +58,7 @@ export default function About() {
       <PageHeader
         eyebrow="关于 / 项目介绍"
         title="3 分钟了解这个项目"
-        description="这是一个作品集项目：不是「做了一个网站」，而是把内容判断沉淀成一套可复核的工作流。下面是推荐的浏览顺序。"
+        description="这是一个自媒体创作工具：不是「做了一个网站」，而是把内容判断沉淀成一套可复核的工作流。下面是推荐的浏览顺序。"
       />
 
       <Card padding="lg" className="space-y-4">
@@ -136,7 +136,7 @@ export default function About() {
               className="inline-flex items-center gap-2 rounded-lg border border-border bg-surface px-3.5 py-2 text-sm font-medium text-text transition-colors hover:bg-surface-hover"
             >
               <FileUser className="h-4 w-4" aria-hidden="true" />
-              查看简历
+              更多资料
             </a>
           )}
         </div>

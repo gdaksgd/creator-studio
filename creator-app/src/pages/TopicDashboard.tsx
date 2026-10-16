@@ -580,7 +580,7 @@ export default function TopicDashboard() {
             </div>
             <p className="mt-3 text-xs text-text-muted">
               第一次来？<Link to="/about" className="font-medium text-primary hover:underline">3 分钟导读</Link>
-              ，按策划 → 平台 → 数据的顺序看这个作品集项目。
+              ，按策划 → 平台 → 数据的顺序了解这个工具。
             </p>
           </div>
 

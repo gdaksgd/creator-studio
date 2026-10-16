@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useMemo, lazy, Suspense, useId } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api, AUTH_TOKEN_KEY, type AccountInfo, type SyncResult, type SyncHistoryEntry } from '../api/client';
 import { useTopicStore } from '../store/topicStore';
 import { useAuthStore } from '../services/authService';
@@ -164,15 +165,18 @@ export default function Analytics() {
   const [retroCategory, setRetroCategory] = useState('all');
   const [retroTag, setRetroTag] = useState('all');
   const toast = useToast();
+  const navigate = useNavigate();
   const { topics, loadTopics } = useTopicStore();
+  /** 未登录与「加载失败」是两件事：前者给登录引导，后者才按错误重试处理 */
+  const authToken = useAuthStore((s) => s.token);
 
   useEffect(() => {
     const hasSession = !!useAuthStore.getState().token;
     if (!hasSession) {
+      // 未登录不是错误：不设 loadError，渲染层给登录引导（见下方 !authToken 分支）
       setAccount(null);
       setHistory([]);
       setInitialLoading(false);
-      setLoadError('账号运营统计现已按账号隔离。登录后查看并保存你自己的平台统计；选题、脚本与报告仍可继续本地使用。');
       return;
     }
     void loadData();
@@ -466,6 +470,22 @@ export default function Analytics() {
   }, [topics, visibleCalibration]);
 
   if (!account) {
+    if (!authToken) {
+      return (
+        <div className="space-y-4">
+          <PageHeader eyebrow="数据 / ANALYTICS" title="数据看板" description="双平台账号指标、增长趋势与「预测 vs 实际」复盘汇总。" />
+          <EmptyState
+            icon={<Activity className="h-5 w-5" />}
+            title="登录后查看你的账号数据"
+            description="这里汇总 B站 / 抖音 的账号指标、增长趋势与「AI 预测 vs 实际播放」的校准复盘；账号统计按账号隔离保存，登录后即可查看与同步。未登录时，选题、脚本、简报与分析报告等本地功能不受影响。"
+            action={<div className="flex flex-wrap items-center justify-center gap-2">
+              <Button onClick={() => navigate('/settings')}>登录 / 注册</Button>
+              <Button variant="secondary" onClick={() => navigate('/report')}>先看行业分析报告</Button>
+            </div>}
+          />
+        </div>
+      );
+    }
     if (loadError && !initialLoading) {
       return (
         <div className="space-y-4">

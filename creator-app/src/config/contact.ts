@@ -10,10 +10,10 @@ export const CONTACT = {
   name: '李泓博',
   /** 关于页署名（展示用，可用常用昵称） */
   displayName: 'gdaksgd',
-  /** 项目仓库地址（作品集语境下指向仓库比个人主页更直接） */
+  /** 项目仓库地址（指向仓库比个人主页更直接） */
   github: 'https://github.com/gdaksgd/creator-studio',
-  /** 求职邮箱；留空则不在页面显示邮箱入口 */
+  /** 联系邮箱；留空则不在页面显示邮箱入口 */
   email: '1251971698@qq.com',
-  /** 简历 PDF 的公开链接；留空则不显示 */
+  /** 附加资料链接（如在线主页）；留空则不显示 */
   resumeUrl: '',
 } as const;

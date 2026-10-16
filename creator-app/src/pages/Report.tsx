@@ -809,7 +809,7 @@ export default function Report() {
       </Card>
 
       <p className="pb-4 text-xs text-text-muted">
-        报告为机器生成，结论需人工复核后使用。导出 Markdown 的内容与页面同源，可随作品集一起提交。
+        报告为机器生成，结论需人工复核后使用。导出 Markdown 的内容与页面同源，便于归档、复盘或对外分享。
       </p>
     </div>
   );
