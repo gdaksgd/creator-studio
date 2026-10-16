@@ -12,6 +12,15 @@
     />
     <meta name="theme-color" content="#f4f6f9" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#0a0e14" media="(prefers-color-scheme: dark)" />
+    <!-- 首屏 LCP 图片：跟 HTML 一起开始下载，不必等 JS 启动后再发请求 -->
+    <link
+      rel="preload"
+      as="image"
+      href="/shots/dashboard-1080.webp"
+      imagesrcset="/shots/dashboard-640.webp 640w, /shots/dashboard-1080.webp 1080w, /shots/dashboard.webp 1440w"
+      imagesizes="(min-width: 960px) 896px, calc(100vw - 48px)"
+      fetchpriority="high"
+    />
     <meta property="og:type" content="website" />
     <meta property="og:title" content="Creator Studio · 内容工作台" />
     <meta

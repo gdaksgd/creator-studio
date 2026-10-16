@@ -1,11 +1,10 @@
-import { lazy, useEffect } from 'react'
+import { Suspense, lazy, useEffect } from 'react'
 import { Routes, Route } from 'react-router-dom'
-import Layout from './components/Layout'
-import { syncOnLaunch } from './services/syncService'
-import { ensureDemoData } from './services/demoData'
-import { useAuthStore } from './services/authService'
-// 路由级懒加载：把 Recharts 这类重依赖关进「数据看板」自己的 chunk，
-// 首屏不再为没打开的页面买单（改造前单 chunk 895 kB / gzip 262 kB）
+import Portal from './pages/Portal'
+import { LoadingBlock } from './components/ui/Spinner'
+// 路由级懒加载：把 Recharts、Dexie 这类重依赖关进各自的 chunk，首屏不为没打开的页面买单。
+// Portal（首访落地页）走同步 import：它是最先要画的页面，不该再等一次 chunk 往返。
+const Layout = lazy(() => import('./components/Layout'))
 const TopicDashboard = lazy(() => import('./pages/TopicDashboard'))
 const ScriptEditor = lazy(() => import('./pages/ScriptEditor'))
 const InfoCenter = lazy(() => import('./pages/InfoCenter'))
@@ -17,28 +16,40 @@ const Settings = lazy(() => import('./pages/Settings'))
 const ContentExperiments = lazy(() => import('./pages/ContentExperiments'))
 const MarketingBriefs = lazy(() => import('./pages/MarketingBriefs'))
 const About = lazy(() => import('./pages/About'))
-const Portal = lazy(() => import('./pages/Portal'))
 
 function App() {
   useEffect(() => {
-    // 启动顺序：① 读 token / 拉 me（账号态）→ ② 云端同步 → ③ 演示数据兜底。
-    // 每一步失败都不能挡住渲染，所以每一段都单独 catch。
-    // ★ ensureDemoData 在已登录时会自己跳过，登录用户看到的空库不会被塞演示数据。
-    void useAuthStore
-      .getState()
-      .init()
-      .catch(() => undefined)
-      .then(() => syncOnLaunch())
-      .catch(() => undefined)
-      .then(() => ensureDemoData())
-      .catch(() => undefined)
+    // 启动顺序：① 账号态 → ② 云端同步（仅登录用户）→ ③ 演示数据兜底。
+    // 三个服务按需 import：门户页首屏的关键路径不再拖上 Dexie / 账号 / 同步模块。
+    // ★ 未登录访客是作品集最常见的访客，他们不会发起任何启动请求（sync 只在有 token 时跑）。
+    void (async () => {
+      try {
+        const [{ useAuthStore, hasToken }, { syncOnLaunch }, { ensureDemoData }] = await Promise.all([
+          import('./services/authService'),
+          import('./services/syncService'),
+          import('./services/demoData'),
+        ])
+        await useAuthStore.getState().init().catch(() => undefined)
+        if (hasToken()) await syncOnLaunch().catch(() => undefined)
+        await ensureDemoData().catch(() => undefined)
+      } catch {
+        /* 按需模块加载失败不挡住渲染 */
+      }
+    })()
   }, [])
 
   return (
     <Routes>
       {/* 门户页：不进 Layout（整屏落地页），首次访问的落点判定见 utils/firstVisit.ts */}
       <Route path="/welcome" element={<Portal />} />
-      <Route element={<Layout />}>
+      {/* Layout 也懒加载：门户页不需要侧边栏，就不为它下载整个工作台外壳 */}
+      <Route
+        element={
+          <Suspense fallback={<LoadingBlock className="min-h-screen" />}>
+            <Layout />
+          </Suspense>
+        }
+      >
         <Route path="/" element={<TopicDashboard />} />
         <Route path="/scripts" element={<ScriptEditor />} />
         <Route path="/scripts/:scriptId" element={<ScriptEditor />} />

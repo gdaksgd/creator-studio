@@ -261,10 +261,13 @@ function HeroShot() {
           </span>
         </div>
         <img
-          src="/shots/dashboard.webp"
+          src="/shots/dashboard-1080.webp"
+          srcSet="/shots/dashboard-640.webp 640w, /shots/dashboard-1080.webp 1080w, /shots/dashboard.webp 1440w"
+          sizes="(min-width: 960px) 896px, calc(100vw - 48px)"
           alt="选题看板界面：热点评分、选题池与本地指标"
           width={1440}
           height={900}
+          fetchPriority="high"
           decoding="async"
           className="block w-full"
         />
@@ -323,15 +326,15 @@ function FeatureCard({ feature }: { feature: Feature }) {
   );
 }
 
-/** 界面速览卡：浏览器窗口样式 + 悬停轻推近 */
+/** 界面速览卡：浏览器窗口样式 + 悬停轻推近（shot 为截图基名，按视口宽度取 640/1080/1440） */
 function ShowcaseFigure({
-  src,
+  shot,
   alt,
   path,
   title,
   caption,
 }: {
-  src: string;
+  shot: string;
   alt: string;
   path: string;
   title: string;
@@ -347,7 +350,9 @@ function ShowcaseFigure({
       </div>
       <div className="overflow-hidden border-b border-border">
         <img
-          src={src}
+          src={`/shots/${shot}-1080.webp`}
+          srcSet={`/shots/${shot}-640.webp 640w, /shots/${shot}-1080.webp 1080w, /shots/${shot}.webp 1440w`}
+          sizes="(min-width: 1024px) 536px, calc(100vw - 48px)"
           alt={alt}
           width={1440}
           height={900}
@@ -528,7 +533,7 @@ export default function Portal() {
           <div className="grid gap-4 lg:grid-cols-2">
             <Reveal className="h-full">
               <ShowcaseFigure
-                src="/shots/report.webp"
+                shot="report"
                 alt="分析报告界面：品类竞争、时长与互动率等维度的数字都带来源与样本量"
                 path="/report"
                 title="分析报告"
@@ -537,7 +542,7 @@ export default function Portal() {
             </Reveal>
             <Reveal delay={90} className="h-full">
               <ShowcaseFigure
-                src="/shots/marketing-briefs.webp"
+                shot="marketing-briefs"
                 alt="版本营销简报界面：目标、受众、卖点依据与预热上线长尾节奏"
                 path="/marketing-briefs"
                 title="版本营销简报"
