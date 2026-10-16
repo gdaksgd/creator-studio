@@ -1,4 +1,4 @@
-# Creator Studio · 游戏内容选题与复盘工作台
+# Creator Studio · 内容工作台
 
 **在线体验**：**[https://creator.creator-app.xyz](https://creator.creator-app.xyz)**
 **代码**：[github.com/gdaksgd/creator-studio](https://github.com/gdaksgd/creator-studio)，仓库保留了 `v1.0.0` → `v1.5.2` 的历史版本快照，可用于对照版本演进。
@@ -51,7 +51,7 @@
 
 ## Creator Studio 项目
 
-**游戏内容选题与复盘工作台｜产品 / 数据 / 开发｜2026.06–至今**
+**内容工作台｜产品 / 数据 / 开发｜2026.06–至今**
 
 Creator Studio 是独立完成的个人项目，通过一个可操作的工作台呈现内容生产、发布复盘和版本传播策划的产品设计与工程实现。
 

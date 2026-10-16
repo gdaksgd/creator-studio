@@ -16,7 +16,7 @@ import { Card } from '../components/ui/Card';
 import { CONTACT } from '../config/contact';
 
 /**
- * 关于 / 项目介绍 —— 第一次打开站点的访客默认先看到这一页（见 utils/firstVisit.ts）。
+ * 关于 / 项目介绍 —— 详细介绍页：门户页（/welcome）的「3 分钟导读」和侧边栏「关于本站」都到这里。
  * 这个应用本身是工具界面，没有这一页的话，访客不知道该看什么、也不知道作者是谁。
  */
 
@@ -62,7 +62,7 @@ export default function About() {
       <PageHeader
         eyebrow="关于 / 项目介绍"
         title="3 分钟了解这个项目"
-        description="这是一个自媒体创作工具：不是「做了一个网站」，而是把内容判断沉淀成一套可复核的工作流。下面是推荐的浏览顺序。"
+        description="这是一个内容工作台：不是「做了一个网站」，而是把内容判断沉淀成一套可复核的工作流。下面是推荐的浏览顺序。"
         actions={
           <Button size="lg" onClick={() => navigate('/')}>
             <LayoutDashboard className="h-4 w-4" aria-hidden="true" />

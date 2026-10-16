@@ -13,7 +13,6 @@ import {
   LogOut,
   Newspaper,
   Settings,
-  Sparkles,
   UserRound,
   Search,
   type LucideIcon,
@@ -178,14 +177,17 @@ function SidebarContent() {
   return (
     <div className="flex h-full flex-col gap-7 px-3 py-5">
       <NavLink to="/" className="flex items-center gap-2.5 px-2">
-        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-gradient text-white shadow-md">
-          <Sparkles className="h-[18px] w-[18px]" aria-hidden="true" />
-        </span>
+        <img
+          src="/logo.png"
+          alt=""
+          aria-hidden="true"
+          className="h-9 w-9 rounded-xl object-cover shadow-md"
+        />
         <span className="flex flex-col leading-tight">
           <span className="text-[15px] font-semibold tracking-tight text-text">
             Creator Studio
           </span>
-          <span className="text-[11px] text-text-muted">自媒体创作助手</span>
+          <span className="text-[11px] text-text-muted">内容工作台</span>
         </span>
       </NavLink>
 
@@ -229,9 +231,12 @@ export default function Layout() {
         <header className="sticky top-0 z-30 border-b border-border bg-surface lg:hidden">
           <div className="flex items-center justify-between gap-3 px-4 py-2.5">
             <NavLink to="/" className="flex items-center gap-2">
-              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-gradient text-white">
-                <Sparkles className="h-4 w-4" aria-hidden="true" />
-              </span>
+              <img
+                src="/logo.png"
+                alt=""
+                aria-hidden="true"
+                className="h-8 w-8 rounded-lg object-cover"
+              />
               <span className="text-sm font-semibold tracking-tight text-text">
                 Creator Studio
               </span>
