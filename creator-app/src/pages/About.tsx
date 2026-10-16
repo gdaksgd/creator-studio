@@ -16,7 +16,7 @@ import { Badge } from '../components/ui/Badge';
 import { CONTACT } from '../config/contact';
 
 /**
- * 关于 / 招聘方导读 —— 给第一次打开站点的人（尤其是招聘方）一条 3 分钟的浏览路线。
+ * 关于 / 项目介绍 —— 给第一次打开站点的人一条 3 分钟的浏览路线。
  * 这个应用本身是工具界面，没有这一页的话，访客不知道该看什么、也不知道作者是谁。
  */
 
@@ -58,7 +58,7 @@ export default function About() {
   return (
     <div className="space-y-5">
       <PageHeader
-        eyebrow="关于 / 招聘方导读"
+        eyebrow="关于 / 项目介绍"
         title="3 分钟了解这个项目"
         description="这是一个内容营销方向的作品集项目：不是「做了一个网站」，而是把内容判断沉淀成一套可复核的工作流。下面是推荐的浏览顺序。"
         actions={
@@ -116,6 +116,10 @@ export default function About() {
 
       <Card padding="lg" className="space-y-3">
         <SectionHeading title="联系我" hint="源码、提交历史与完整 README 都在 GitHub" />
+        <p className="text-sm leading-relaxed text-text">
+          <span className="font-semibold">{CONTACT.name}</span>
+          <span className="text-text-secondary"> · {CONTACT.tagline}</span>
+        </p>
         <div className="flex flex-wrap gap-2.5">
           <a
             href={CONTACT.github}

@@ -59,7 +59,7 @@ const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
     title: '系统',
     items: [
       { to: '/settings', label: '设置', desc: '接口、偏好与数据', Icon: Settings },
-      { to: '/about', label: '关于本站', desc: '招聘方导读与联系方式', Icon: Compass },
+      { to: '/about', label: '关于本站', desc: '项目介绍与联系方式', Icon: Compass },
     ],
   },
 ];
