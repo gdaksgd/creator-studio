@@ -50,7 +50,7 @@ function Delta({ value, label, positiveIsGood }: {
       ? 'text-success'
       : 'text-danger';
   return (
-    <span className={cn('num inline-flex items-center gap-1 text-xs font-medium', tone)}>
+    <span className={cn('num inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-medium', tone)}>
       <Icon className="h-3.5 w-3.5" aria-hidden="true" />
       {flat ? '持平' : `${Math.abs(value).toFixed(1)}%`}
       {label && <span className="font-normal text-text-muted">{label}</span>}
@@ -106,11 +106,11 @@ export function Stat({
         </span>
         {unit && <span className="text-xs text-text-muted">{unit}</span>}
       </div>
-      <div className="mt-2 flex min-h-[18px] items-center gap-2">
+      <div className="mt-2 flex min-h-[18px] flex-wrap items-center gap-x-2 gap-y-0.5">
         {typeof delta === 'number' && (
           <Delta value={delta} label={deltaLabel} positiveIsGood={positiveIsGood} />
         )}
-        {hint && <span className="truncate text-xs text-text-secondary">{hint}</span>}
+        {hint && <span className="min-w-0 truncate text-xs text-text-secondary">{hint}</span>}
       </div>
     </div>
   );
