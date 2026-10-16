@@ -17,6 +17,7 @@ const Settings = lazy(() => import('./pages/Settings'))
 const ContentExperiments = lazy(() => import('./pages/ContentExperiments'))
 const MarketingBriefs = lazy(() => import('./pages/MarketingBriefs'))
 const About = lazy(() => import('./pages/About'))
+const Portal = lazy(() => import('./pages/Portal'))
 
 function App() {
   useEffect(() => {
@@ -35,6 +36,8 @@ function App() {
 
   return (
     <Routes>
+      {/* 门户页：不进 Layout（整屏落地页），首次访问的落点判定见 utils/firstVisit.ts */}
+      <Route path="/welcome" element={<Portal />} />
       <Route element={<Layout />}>
         <Route path="/" element={<TopicDashboard />} />
         <Route path="/scripts" element={<ScriptEditor />} />

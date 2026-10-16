@@ -352,6 +352,79 @@
     font-variant-numeric: tabular-nums;
     font-feature-settings: "tnum";
   }
+
+  /* ── 门户页（/welcome）质感：极光光斑 / 聚光卡 / 旋转光边 / 倾斜截图 ── */
+
+  /* 极光光斑：慢慢漂移的氛围光，尺寸/位置/颜色由行内样式给。
+     用径向渐变代替大半径 filter: blur —— 视觉几乎一致，但省掉模糊图层的栅格化与合成成本 */
+  .aurora-blob {
+    position: absolute;
+    border-radius: 999px;
+    pointer-events: none;
+    will-change: transform;
+    animation: aurora-drift 26s ease-in-out infinite;
+  }
+
+  /* 聚光：跟随鼠标的柔光（--mx / --my 由组件在 mousemove 里写入） */
+  .spotlight {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    transition: opacity 0.35s ease;
+    background: radial-gradient(
+      240px circle at var(--mx, 50%) var(--my, 50%),
+      color-mix(in oklab, var(--primary) 13%, transparent),
+      transparent 66%
+    );
+    pointer-events: none;
+  }
+
+  .spotlight-host:hover .spotlight {
+    opacity: 1;
+  }
+
+  /* 旋转光边：CTA 卡片的一圈细流光。
+     实现为「静态锥形渐变 + 只跑 transform 的旋转」，父级再用遮罩裁成 1px 亮边——
+     动画全程走合成层，不再逐帧重绘渐变（逐帧重绘是之前的主要卡顿来源之一） */
+  .glow-ring {
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    padding: 1px;
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask-composite: exclude;
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  .glow-spin {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 160%;
+    aspect-ratio: 1;
+    margin: -80% 0 0 -80%;
+    background: conic-gradient(
+      transparent 0deg,
+      color-mix(in oklab, var(--primary) 62%, transparent) 45deg,
+      transparent 100deg
+    );
+    animation: glow-spin 7s linear infinite;
+  }
+
+  /* 缓慢上下浮动（门户页截图上的小徽章用） */
+  .float-soft {
+    animation: float-soft 6s ease-in-out infinite;
+  }
+
+  /* 随鼠标轻微倾斜的产品截图框（--rx / --ry 由组件写入） */
+  .tilt-frame {
+    transform: perspective(1200px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg));
+    transition: transform 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: transform;
+  }
 }
 
 /* ── 动效：均为入场用，配合 animation-delay 做列表错落 ── */
@@ -392,6 +465,33 @@
   }
 }
 
+/* ── 门户页动效 ── */
+@keyframes aurora-drift {
+  0%,
+  100% {
+    transform: translate3d(-3%, -2%, 0);
+  }
+  50% {
+    transform: translate3d(4%, 5%, 0);
+  }
+}
+
+@keyframes glow-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes float-soft {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-9px);
+  }
+}
+
 @utility anim-rise {
   animation: ui-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
@@ -402,6 +502,20 @@
 
 @utility anim-pop {
   animation: ui-pop 0.24s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* 滚动进入视口后淡入：配合 IntersectionObserver 追加 .reveal-in */
+@utility reveal {
+  opacity: 0;
+  transform: translateY(22px);
+  transition:
+    opacity 0.65s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.65s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@utility reveal-in {
+  opacity: 1;
+  transform: none;
 }
 
 /* 子元素依次入场（最多到第 12 个，之后不再延迟，避免长列表等待） */
@@ -427,7 +541,20 @@
   .anim-rise,
   .anim-fade,
   .anim-pop,
-  .stagger-children > * {
+  .stagger-children > *,
+  .aurora-blob,
+  .float-soft,
+  .glow-spin {
     animation: none !important;
+  }
+
+  .reveal {
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
+  }
+
+  .tilt-frame {
+    transform: none !important;
   }
 }
