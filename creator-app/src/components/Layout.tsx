@@ -215,6 +215,17 @@ export default function Layout() {
   useAuthExpiredToast();
   const { pathname } = useLocation();
 
+  // 每页独立标题：多标签、书签与浏览历史里都能看清是哪一页
+  useEffect(() => {
+    const exact = ALL_ITEMS.find((item) => item.to === pathname);
+    const nested =
+      exact ??
+      ALL_ITEMS.filter((item) => item.to !== '/' && pathname.startsWith(item.to)).sort(
+        (a, b) => b.to.length - a.to.length,
+      )[0];
+    document.title = nested ? `${nested.label} · Creator Studio` : 'Creator Studio · 内容工作台';
+  }, [pathname]);
+
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'instant' });
   }, [pathname]);
