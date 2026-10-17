@@ -261,9 +261,10 @@ function HeroShot() {
             creator.creator-app.xyz
           </span>
         </div>
+        {/* 截图 URL 带版本号：截图内容更新后改 v，绕开浏览器/边缘的 1 天缓存 */}
         <img
-          src="/shots/dashboard-1080.webp"
-          srcSet="/shots/dashboard-640.webp 640w, /shots/dashboard-1080.webp 1080w, /shots/dashboard.webp 1440w"
+          src="/shots/dashboard-1080.webp?v=2"
+          srcSet="/shots/dashboard-640.webp?v=2 640w, /shots/dashboard-1080.webp?v=2 1080w, /shots/dashboard.webp?v=2 1440w"
           sizes="(min-width: 960px) 896px, calc(100vw - 48px)"
           alt="选题看板界面：热点评分、选题池与本地指标"
           width={1440}
@@ -351,8 +352,8 @@ function ShowcaseFigure({
       </div>
       <div className="overflow-hidden border-b border-border">
         <img
-          src={`/shots/${shot}-1080.webp`}
-          srcSet={`/shots/${shot}-640.webp 640w, /shots/${shot}-1080.webp 1080w, /shots/${shot}.webp 1440w`}
+          src={`/shots/${shot}-1080.webp?v=2`}
+          srcSet={`/shots/${shot}-640.webp?v=2 640w, /shots/${shot}-1080.webp?v=2 1080w, /shots/${shot}.webp?v=2 1440w`}
           sizes="(min-width: 1024px) 536px, calc(100vw - 48px)"
           alt={alt}
           width={1440}
