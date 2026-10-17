@@ -513,6 +513,14 @@ su -s /bin/bash creator -c '/usr/bin/node /opt/creator-studio/server/scripts/bac
 schtasks /query /tn "CreatorStudio-SupabaseKeepAlive"
 ```
 
+### 查看访问统计
+
+线上按页面访问记录访客信息（时间 / 真实 IP / 国家与城市 / 路径），落在源站的 `server/data/access/YYYY-MM.jsonl`，不对外提供。
+
+- **一键查看**（Windows 本机）：双击项目根目录的 `visit-report.bat`（默认最近 7 天），或命令行 `visit-report.bat 30` 看最近 30 天；报表同时存档到 `logs\visits-latest.txt`。脚本通过 SSH 调用源站上的 `server/scripts/visits.mjs`，依赖本机 `%USERPROFILE%\.ssh\creator_hk_ed25519` 密钥。
+- **在源站上直接跑**：`su -s /bin/bash creator -c 'node /opt/creator-studio/server/scripts/visits.mjs --days 7'`（可选 `--limit`、`--ip`）。
+- 地区字段来自 Cloudflare 的「Add visitor location headers」（Rules → Settings → Managed Transforms，已开启）；在此之前的历史记录没有地区信息。
+
 ---
 
 ## 十四、常见问题
