@@ -1,10 +1,9 @@
 import { Suspense, useEffect, useState } from 'react';
-import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   Bookmark,
   ChartColumn,
   Compass,
-  DoorOpen,
   FlaskConical,
   Megaphone,
   FileChartColumn,
@@ -180,7 +179,7 @@ function useAuthExpiredToast() {
 function SidebarContent() {
   return (
     <div className="flex h-full flex-col gap-7 px-3 py-5">
-      <NavLink to="/" className="flex items-center gap-2.5 px-2">
+      <NavLink to="/welcome" title="返回门户页" className="flex items-center gap-2.5 px-2">
         <img
           src="/logo.png"
           alt=""
@@ -209,15 +208,6 @@ function SidebarContent() {
       <div className="flex flex-col gap-3 border-t border-border px-1 pt-4">
         <div className="flex items-center justify-between gap-2">
           <span className="px-1 text-[11px] text-text-muted">创作者工作空间</span>
-          {/* 低调的返回入口：让访客随时能回到门户页（/welcome） */}
-          <Link
-            to="/welcome"
-            title="返回门户页"
-            className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-text-muted transition-colors hover:bg-surface-hover hover:text-text"
-          >
-            <DoorOpen className="h-3.5 w-3.5" aria-hidden="true" />
-            门户页
-          </Link>
         </div>
       </div>
     </div>
@@ -259,7 +249,7 @@ export default function Layout() {
         {/* 移动端：顶栏 + 可横滑的导航条（窄屏不至于把导航挤成两行） */}
         <header className="sticky top-0 z-30 border-b border-border bg-surface lg:hidden">
           <div className="flex items-center justify-between gap-3 px-4 py-2.5">
-            <NavLink to="/" className="flex items-center gap-2">
+            <NavLink to="/welcome" title="返回门户页" className="flex items-center gap-2">
               <img
                 src="/logo.png"
                 alt=""
