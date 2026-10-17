@@ -471,6 +471,7 @@ systemctl status caddy               # 反向代理
 
 - 部署流程：本地 `build.ps1` 构建 → 上传 `server/dist`、`server/public`、`package*.json` → 远端 `npm ci --omit=dev` → 重启服务。配置模板见 `tools/hk/`（`creator-studio.service`、`Caddyfile`）。
 - 源站证书为自签名（`/etc/caddy/origin.crt`），Cloudflare SSL 模式必须保持 **Full**（非 strict）；若换成 Cloudflare Origin Certificate 可升级到 Full (strict)。
+- **线上不依赖家里电脑**：DNS 与 Worker 在 Cloudflare，站点与每日保活/备份都在香港源站；家里电脑关机不影响访问与账号同步。
 
 ### 回滚（旧的家里电脑隧道仍保留）
 
@@ -496,13 +497,20 @@ server (Express) --HTTPS--> creator.creator-app.xyz/api/cs-cloud/*  --Workers Ro
 
 ### 每日任务
 
-| 任务 | 时间 | 脚本 | 日志 |
-|---|---|---|---|
-| Supabase 保活 + 备份 | 每天 09:00 | `tools\keepalive.ps1` | `logs\keepalive.log` |
+| 任务 | 位置 | 时间 | 脚本 | 日志 / 产物 |
+|---|---|---|---|---|
+| Supabase 保活 + 云端备份 | **香港源站（cron）** | 每天 09:05 | `server/scripts/backup-cloud.mjs` | `/opt/creator-studio/logs/keepalive.log`；备份在 `/opt/creator-studio/backups/`（保留 30 天） |
+| 同上的本机副本（可选） | 家里电脑（计划任务） | 每天 09:00 | `tools\keepalive.ps1` | `logs\keepalive.log`；`backups\` |
+
+```bash
+# 源站：查看/手动运行
+crontab -u creator -l
+su -s /bin/bash creator -c '/usr/bin/node /opt/creator-studio/server/scripts/backup-cloud.mjs'
+```
 
 ```powershell
+# 家里电脑（可选）：查看计划任务
 schtasks /query /tn "CreatorStudio-SupabaseKeepAlive"
-schtasks /run   /tn "CreatorStudio-SupabaseKeepAlive"
 ```
 
 ---
