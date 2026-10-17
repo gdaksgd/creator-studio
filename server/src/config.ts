@@ -26,6 +26,8 @@ export const config = {
   supabaseAnonKey: process.env.SUPABASE_ANON_KEY || '',
   // 账号 token 的 HMAC 密钥；不配会自动生成并持久化到 server/data/auth-secret.txt
   authSecret: process.env.AUTH_SECRET || '',
+  // 私密访问日报的路径令牌（/r/<token>/visits-YYYY-MM-DD.html）；为空则路由全部 404
+  reportToken: process.env.REPORT_TOKEN || '',
   // AI 每日调用上限（公网防刷，默认 300）
   aiDailyLimit: parsePositiveInt(process.env.AI_DAILY_LIMIT, 300),
 };

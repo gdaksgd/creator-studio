@@ -15,6 +15,7 @@ import syncRoutes from './routes/sync.js';
 import videoRoutes from './routes/video.js';
 import benchmarkRoutes from './routes/benchmark.js';
 import reportRoutes from './routes/report.js';
+import visitsReportRoutes from './routes/visitsReport.js';
 import { refreshAll as refreshBenchmarks } from './services/benchmarkService.js';
 import { recordVisit } from './services/accessLog.js';
 
@@ -169,6 +170,8 @@ app.use('/api/sync', syncRoutes);
 app.use('/api/video', videoRoutes);
 app.use('/api/benchmark', benchmarkRoutes);
 app.use('/api/report', reportRoutes);
+// 私密访问日报：/r/<REPORT_TOKEN>/visits-YYYY-MM-DD.html（非 /api 路径，需在静态托管之前挂载）
+app.use(visitsReportRoutes);
 
 // 未匹配的 /api/* 一律返回 404 JSON（不能落到 SPA fallback 返回 HTML）
 app.use('/api', (req, res) => {

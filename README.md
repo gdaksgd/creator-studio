@@ -517,7 +517,13 @@ schtasks /query /tn "CreatorStudio-SupabaseKeepAlive"
 
 线上按页面访问记录访客信息（时间 / 真实 IP / 国家与城市 / 路径），落在源站的 `server/data/access/YYYY-MM.jsonl`，不对外提供。
 
-- **一键查看**（Windows 本机）：双击项目根目录的 `visit-report.bat`（默认最近 7 天），或命令行 `visit-report.bat 30` 看最近 30 天；报表同时存档到 `logs\visits-latest.txt`。脚本通过 SSH 调用源站上的 `server/scripts/visits.mjs`，依赖本机 `%USERPROFILE%\.ssh\creator_hk_ed25519` 密钥。
+- **一键查看**（Windows 本机）：双击项目根目录的 `visit-report.bat`（默认最近 7 天），或命令行 `visit-report.bat 30` 看最近 30 天；报表同时存档到 `logs\visits-latest.txt`。加 `html` 参数（`visit-report.bat 7 html`）会在本地生成并打开 HTML 版报表。
+- **HTML 日报**：源站每天 09:10（北京时间，cron）生成最近 7 天的 HTML 报表到 `server/data/reports/visits-YYYY-MM-DD.html`，并通过私密链接提供：`https://creator.creator-app.xyz/r/<REPORT_TOKEN>/visits-YYYY-MM-DD.html`（令牌在 `server/.env` 的 `REPORT_TOKEN`，为空则该路由全部 404；报表带 `noindex` 且不缓存；链接含访客 IP，请勿转发）。
+- **微信推送**：日报任务同时把昨日摘要推送到微信，需要在 `server/.env` 配置以下任一服务（个人微信没有官方发消息接口，这两个是常用的免费转推方案）：
+  - Server酱³：`WECHAT_PUSH_KEY=<SENDKEY>`（https://sct.ftqq.com 扫码登录后获取）
+  - PushPlus：`PUSHPLUS_TOKEN=<token>`（https://www.pushplus.plus 扫码登录后获取）
+
+  未配置时任务只生成报表并在 `logs/daily-report.log` 记录 `SKIP push not configured`。
 - **在源站上直接跑**：`su -s /bin/bash creator -c 'node /opt/creator-studio/server/scripts/visits.mjs --days 7'`（可选 `--limit`、`--ip`）。
 - 地区字段来自 Cloudflare 的「Add visitor location headers」（Rules → Settings → Managed Transforms，已开启）；在此之前的历史记录没有地区信息。
 
