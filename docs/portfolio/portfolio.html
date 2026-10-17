@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>Creator Studio · 内容工作台 — 项目作品集 · 李泓博</title>
+<meta name="author" content="李泓博" />
+<style>
+  @page { size: A4; margin: 0; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #fff; }
+  body {
+    font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif;
+    color: #0f172a;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .page {
+    width: 210mm;
+    height: 297mm;
+    padding: 14mm 15mm;
+    position: relative;
+    background: #fff;
+    page-break-after: always;
+  }
+  .page:last-child { page-break-after: auto; }
+
+  /* ---------- 通用排版 ---------- */
+  h1, h2, h3, p, ul, ol, table { margin: 0; }
+  .eyebrow { font-size: 9pt; font-weight: 600; letter-spacing: 0.16em; color: #7c3aed; text-transform: uppercase; }
+  h1 { font-size: 26pt; font-weight: 700; letter-spacing: -0.02em; line-height: 1.2; }
+  h2 { font-size: 14pt; font-weight: 700; letter-spacing: -0.01em; display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  h2::before { content: ""; width: 3px; height: 14px; border-radius: 2px; background: #7c3aed; display: inline-block; }
+  h3 { font-size: 10.5pt; font-weight: 700; }
+  .muted { color: #64748b; }
+  .small { font-size: 8.5pt; line-height: 1.65; color: #64748b; }
+  .lead { font-size: 11pt; line-height: 1.7; color: #334155; }
+
+  /* ---------- 封面区 ---------- */
+  .cover-head { display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 14px; border-bottom: 1px solid #e4e7ec; }
+  .cover-head .who { text-align: right; font-size: 9pt; line-height: 1.7; color: #475467; }
+  .cover-head .who b { font-size: 10.5pt; color: #0f172a; }
+  h1 { margin-top: 18px; }
+  .subline { margin-top: 6px; font-size: 10pt; color: #475467; }
+  .links { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 9pt; color: #334155; }
+  .links span b { color: #0f172a; font-weight: 600; }
+
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 14px; }
+  .stat { border: 1px solid #e4e7ec; border-radius: 8px; padding: 9px 11px; background: #fafbfc; }
+  .stat .n { font-size: 17pt; font-weight: 700; letter-spacing: -0.02em; color: #0f172a; font-variant-numeric: tabular-nums; }
+  .stat .n small { font-size: 9pt; font-weight: 600; color: #7c3aed; margin-left: 2px; }
+  .stat .t { margin-top: 2px; font-size: 8.5pt; color: #64748b; }
+
+  table.problems { width: 100%; border-collapse: collapse; margin-top: 12px; }
+  table.problems th { font-size: 8.5pt; font-weight: 600; color: #475467; text-align: left; padding: 6px 10px; background: #f7f8fa; border-bottom: 1px solid #e4e7ec; }
+  table.problems td { font-size: 9pt; line-height: 1.6; padding: 6px 10px; border-bottom: 1px solid #eef1f5; vertical-align: top; }
+  table.problems td:first-child { width: 34%; color: #0f172a; font-weight: 600; }
+  table.problems td:last-child { color: #475467; }
+
+  figure { margin: 14px 0 0; }
+  figure img { display: block; width: 100%; border: 1px solid #e4e7ec; border-radius: 8px; }
+  figcaption { margin-top: 5px; font-size: 8.5pt; color: #64748b; }
+  .shot-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+  .shot-pair img { display: block; width: 100%; border: 1px solid #e4e7ec; border-radius: 6px; }
+  .shot-pair .cap { margin-top: 4px; font-size: 8pt; color: #64748b; line-height: 1.5; }
+
+  table.map { width: 100%; border-collapse: collapse; margin-top: 6px; }
+  table.map th { font-size: 8.5pt; font-weight: 600; color: #475467; text-align: left; padding: 6px 10px; background: #f7f8fa; border-bottom: 1px solid #e4e7ec; }
+  table.map td { font-size: 9pt; line-height: 1.6; padding: 7px 10px; border-bottom: 1px solid #eef1f5; vertical-align: top; color: #475467; }
+  table.map td:first-child { width: 22%; font-weight: 600; color: #0f172a; }
+
+  .work-grid { margin-top: 6px; }
+  .work-item { display: flex; gap: 10px; padding: 6px 0; border-bottom: 1px dashed #eef1f5; }
+  .work-item:last-child { border-bottom: 0; }
+  .work-item b { flex: 0 0 72px; font-size: 9pt; font-weight: 700; color: #0f172a; }
+  .work-item span { font-size: 9pt; line-height: 1.6; color: #475467; }
+
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .card { border: 1px solid #e4e7ec; border-radius: 8px; padding: 11px 13px; background: #fafbfc; }
+  .card h3 { margin-bottom: 5px; }
+  .card p { font-size: 9pt; line-height: 1.65; color: #475467; }
+  .card ul { margin: 0; padding-left: 15px; }
+  .card li { font-size: 9pt; line-height: 1.65; color: #475467; }
+  ol.plans { margin: 0; padding-left: 16px; }
+  ol.plans li { font-size: 9pt; line-height: 1.68; color: #475467; margin-bottom: 5px; }
+  ol.plans b { color: #0f172a; }
+
+  .quote { margin-top: 10px; padding: 9px 12px; border-left: 3px solid #7c3aed; background: #faf9ff; border-radius: 0 6px 6px 0; font-size: 9.5pt; line-height: 1.7; color: #334155; }
+
+  .foot { position: absolute; left: 15mm; right: 15mm; bottom: 10mm; display: flex; justify-content: space-between; align-items: center; padding-top: 6px; border-top: 1px solid #eef1f5; font-size: 8pt; color: #94a3b8; }
+  .page-no { font-variant-numeric: tabular-nums; }
+  .section { margin-top: 16px; }
+</style>
+</head>
+<body>
+
+<!-- ============ 第 1 页 ============ -->
+<div class="page">
+  <div class="cover-head">
+    <div>
+      <div class="eyebrow">项目作品集 · Project Portfolio</div>
+      <h1>Creator Studio<br />内容工作台</h1>
+      <div class="subline">本地优先的内容创作工作台｜产品设计 / 数据 / 工程实现｜独立完成｜2026.06 – 至今</div>
+      <div class="links">
+        <span><b>在线体验</b> creator.creator-app.xyz</span>
+        <span><b>开源仓库</b> github.com/gdaksgd/creator-studio</span>
+      </div>
+    </div>
+    <div class="who">
+      <b>李泓博</b><br />
+      1251971698@qq.com<br />
+      2026 年 10 月
+    </div>
+  </div>
+
+  <p class="lead" style="margin-top:16px">
+    内容创作里最关键的判断——选题值不值得做、脚本适配哪个平台、发布后的数据说明了什么——往往靠感觉。
+    这个项目把它们变成一套可操作、可复核的工作流：<b>每个数字都有出处，每个结论都有边界。</b>
+  </p>
+
+  <div class="stats" style="margin-top:10px">
+    <div class="stat"><div class="n">10<small>个</small></div><div class="t">工作台页面</div></div>
+    <div class="stat"><div class="n">770<small>条</small></div><div class="t">B站公开样本</div></div>
+    <div class="stat"><div class="n">64<small>个</small></div><div class="t">报告数字全部绑定来源</div></div>
+    <div class="stat"><div class="n">4<small>条</small></div><div class="t">平台适配规则 · A/B/C 证据分级</div></div>
+  </div>
+
+  <div class="section" style="margin-top:12px">
+    <h2>它把哪些问题变成了可执行的工作流</h2>
+    <table class="problems">
+      <tr><th>内容工作中的问题</th><th>项目里的做法</th></tr>
+      <tr><td>这个选题值不值得做？</td><td>品类播放分位、互动率水位线给依据；样本不足时直接不给结论</td></tr>
+      <tr><td>这条脚本发 B站 还是抖音？</td><td>平台适配检查：同一份脚本两个平台给出<b>不同结论</b>，每条建议带出处与 A/B/C 证据等级</td></tr>
+      <tr><td>发布后到底准不准？</td><td>粘贴 B站链接精确取数，AI 预估与真实播放逐条对账；缺数据的样本单列，不补 0</td></tr>
+      <tr><td>汇报时被问「这数字哪来的」？</td><td>分析报告为每个数字记录来源、样本量、时间窗与统计方法，可导出 Markdown</td></tr>
+      <tr><td>方案和结果怎么区分？</td><td>版本营销简报写清目标、人群、卖点依据与传播节奏，计划值不写成达成结果</td></tr>
+      <tr><td>改动真的有效吗？</td><td>内容实验：单一变量、样本门槛与人工复盘；样本不足时拒绝下「成功」结论</td></tr>
+    </table>
+  </div>
+
+  <figure style="margin-top:10px">
+    <img src="dashboard-hero.png" alt="选题看板主界面：本地优先徽标、新建选题入口与四个本地指标卡" />
+    <figcaption>选题看板：把「选题池 / 已发布 / 累计播放 / 平均预测偏差」摆在首屏，所有数字标注来源与口径。</figcaption>
+  </figure>
+
+  <div class="foot"><span>Creator Studio · 内容工作台 · 项目作品集</span><span class="page-no">1 / 3</span></div>
+</div>
+
+<!-- ============ 第 2 页 ============ -->
+<div class="page">
+  <h2>项目能力与岗位的对应关系</h2>
+  <table class="map">
+    <tr><th>能力方向</th><th>项目中的对应能力</th><th>可查看的页面与证据</th></tr>
+    <tr><td>内容运营 · 内容策划</td><td>从选题、脚本、平台适配、发布回填到复盘的完整链路</td><td>选题看板、脚本编辑、平台适配检查、发布记录、内容实验</td></tr>
+    <tr><td>创作者运营</td><td>把内容方向沟通与发布后复盘组织为可追踪的流程</td><td>选题状态流转、复盘标签、内容实验（不包含合同、结算与 CRM）</td></tr>
+    <tr><td>数据与工程</td><td>数据口径设计、可溯源报告、本地优先与账号制云同步</td><td>分析报告、预测校准、数据看板、同步设置</td></tr>
+  </table>
+
+  <div class="section">
+    <h2>两个核心界面</h2>
+    <div class="shot-pair">
+      <div>
+        <img src="../screenshots/report.png" alt="分析报告：每个数字都带来源与样本量" />
+        <div class="cap"><b style="color:#0f172a">分析报告</b>：770 条样本、64 个数字全部绑定来源与口径；「无来源数字 0 个」由程序自检保证。</div>
+      </div>
+      <div>
+        <img src="../screenshots/marketing-briefs.png" alt="版本营销简报：目标、受众、卖点依据与传播节奏" />
+        <div class="cap"><b style="color:#0f172a">版本营销简报</b>：目标 / 受众 / 卖点依据 / 预热·上线·长尾节奏 / 评估指标，结构化到可复盘。</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>我在这个项目里做了什么</h2>
+    <div class="work-grid">
+      <div class="work-item"><b>产品定义</b><span>把「选题靠感觉」拆成可执行的数据动作：品类水位线、预测校准、跨平台适配、可导出报告；并定下「无来源不给数字」的硬约束。</span></div>
+      <div class="work-item"><b>数据口径</b><span>选择数据源并做对照实验（榜单 vs 搜索时间窗）；定义分位 / 中位 / 互动率口径、样本门槛，以及 A/B/C 证据等级的表达方式。</span></div>
+      <div class="work-item"><b>前端实现</b><span>React 19 + TypeScript + Vite + Tailwind + Zustand + Dexie，实现 10 个工作台页面，含移动端 390 / 768 / 1440 三档宽度适配。</span></div>
+      <div class="work-item"><b>后端实现</b><span>Node 22 + Express 5：资讯采集器（RSS / YouTube / B站 / Steam）、零依赖规则引擎、报告生成与 Markdown 导出、分层限流与账号体系。</span></div>
+      <div class="work-item"><b>工程与运维</b><span>账号制云同步（scrypt + HMAC 令牌）、本地数据库原子写与同步冲突处理、GitHub Actions CI、香港服务器 + Cloudflare 部署与监控。</span></div>
+    </div>
+  </div>
+
+  <div class="foot"><span>Creator Studio · 内容工作台 · 项目作品集</span><span class="page-no">2 / 3</span></div>
+</div>
+
+<!-- ============ 第 3 页 ============ -->
+<div class="page">
+  <h2>判断过程：两个被实测推翻的原计划</h2>
+  <ol class="plans">
+    <li><b>「自动列出自己账号全部视频再按标题匹配回填」→ 放弃。</b>实测 B站 <code>/x/space/wbi/arc/search</code> 稳定返回 -352 风控校验失败（带 WBI 签名与 cookie 也一样），而单条取数接口 8/8 成功。改为「粘贴链接精确取数」，同时消灭了「标题匹配错人」这一类错误。</li>
+    <li><b>「用 B站排行榜做品类基准」→ 放弃。</b>实测榜单条目中位年龄 552 天，是一份长期冻结的快照，拿来算「当前水位线」会失真；而且它答错了问题——排行榜回答「现在什么在火」，回答不了「这个品类的正常水位是多少」。改用可控制时间窗的搜索源。</li>
+  </ol>
+  <div class="quote">有哪些数据源，和「哪个数据源能回答这个问题」，是两件事。</div>
+
+  <div class="section">
+    <h2>数据诚实：写进产品规则，而不是写在免责声明里</h2>
+    <div class="two-col">
+      <div class="card">
+        <h3>每个数字必须有出处</h3>
+        <p>报告里的每个数字都绑定来源、样本量、时间窗与统计方法；拿不到数据就显示「暂无数据」，<b>绝不用 0 或占位数字代替</b>。程序自检统计「无来源数字」，必须为 0。</p>
+      </div>
+      <div class="card">
+        <h3>结论有边界</h3>
+        <p>演示数据明确标注；简报的计划值与复盘结果分栏显示；内容实验设样本门槛，<b>样本不足时拒绝下「成功」结论</b>；报告逐条写明统计局限。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>技术栈与部署</h2>
+    <div class="two-col">
+      <div class="card">
+        <h3>技术栈</h3>
+        <ul>
+          <li>前端：React 19 · TypeScript · Vite · Tailwind CSS · Zustand · Dexie (IndexedDB)</li>
+          <li>后端：Node 22 · Express 5 · node-cron</li>
+          <li>数据：本地优先（IndexedDB），可选 Supabase 账号制云同步</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>部署与质量</h3>
+        <ul>
+          <li>线上：香港轻量服务器（systemd + Caddy）前置 Cloudflare 代理</li>
+          <li>构建闸门：React hooks 顺序体检 → TypeScript 类型检查 → 生产构建 → CI</li>
+          <li>运维：每日云端数据备份、访问日志与日报</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="quote" style="margin-top:18px">
+    这个项目由我一个人完成：从需求定义、数据口径设计，到前后端实现与线上部署。它展示的不是「堆了多少功能」，而是把内容判断沉淀为可操作、可复核、可追问的工作流的能力。
+  </div>
+
+  <div class="foot"><span>李泓博 · 1251971698@qq.com · creator.creator-app.xyz · github.com/gdaksgd/creator-studio</span><span class="page-no">3 / 3</span></div>
+</div>
+
+</body>
+</html>
