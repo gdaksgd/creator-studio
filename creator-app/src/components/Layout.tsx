@@ -19,6 +19,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '../utils/cn';
+import { prefetchRoute, scheduleIdlePrefetch } from '../utils/prefetch';
 import { ThemeToggle } from './ui/ThemeToggle';
 import { LoadingBlock } from './ui/Spinner';
 import { Button } from './ui/Button';
@@ -72,6 +73,8 @@ function SidebarLink({ item }: { item: NavItem }) {
     <NavLink
       to={to}
       end={end}
+      onPointerEnter={() => prefetchRoute(to)}
+      onTouchStart={() => prefetchRoute(to)}
       className={({ isActive }) =>
         cn(
           'group relative flex items-center gap-3 rounded-lg px-3 py-2 transition-colors duration-150',
@@ -225,6 +228,11 @@ export default function Layout() {
   useAuthExpiredToast();
   const { pathname } = useLocation();
 
+  // 空闲时预取各标签页的代码 chunk，避免第一次点开时现下载（移动端最明显的卡顿源）
+  useEffect(() => {
+    scheduleIdlePrefetch();
+  }, []);
+
   // 每页独立标题：多标签、书签与浏览历史里都能看清是哪一页
   useEffect(() => {
     const exact = ALL_ITEMS.find((item) => item.to === pathname);
@@ -273,6 +281,8 @@ export default function Layout() {
                 key={to}
                 to={to}
                 end={end}
+                onPointerEnter={() => prefetchRoute(to)}
+                onTouchStart={() => prefetchRoute(to)}
                 className={({ isActive }) =>
                   cn(
                     'inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
