@@ -16,6 +16,7 @@ import videoRoutes from './routes/video.js';
 import benchmarkRoutes from './routes/benchmark.js';
 import reportRoutes from './routes/report.js';
 import { refreshAll as refreshBenchmarks } from './services/benchmarkService.js';
+import { recordVisit } from './services/accessLog.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -36,6 +37,13 @@ app.use((req, res, next) => {
       `[req] ${new Date().toISOString()} ${req.method} ${url} ${res.statusCode} ${ms.toFixed(1)}ms ip=${req.ip || '-'} cf=${cfIp}`
     );
   });
+  next();
+});
+
+// 访问统计：页面访问写 data/access/YYYY-MM.jsonl（时间 / IP / 地区 / 路径），
+// 供 server/scripts/visits.mjs 出报表；API 与静态资源不计入。
+app.use((req, res, next) => {
+  res.on('finish', () => recordVisit(req, res.statusCode));
   next();
 });
 
