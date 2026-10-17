@@ -437,6 +437,7 @@ powershell -ExecutionPolicy Bypass -File autostart.ps1
 │  ├─ hourly-cache.mjs        资讯/报告缓存行为回归
 │  ├─ analytics-cache.mjs     数据看板缓存行为回归（每小时回源 + 手动同步绕过缓存）
 │  ├─ hooks-audit.mjs         React hooks 顺序静态体检
+│  ├─ hk/                     香港源站部署模板（systemd unit / Caddyfile）
 │  ├─ backup.ps1              每日备份（失败保护 + 30 天保留）
 │  └─ keepalive.ps1           Supabase 保活 + 备份
 │
@@ -448,23 +449,36 @@ powershell -ExecutionPolicy Bypass -File autostart.ps1
 
 ## 十三、运维
 
-### Cloudflare 隧道
+### 部署形态（2026-10-17 起）
 
-配置文件：`%USERPROFILE%\.cloudflared\config.yml`
+线上站点运行在**阿里云香港轻量应用服务器**（Ubuntu 24.04，2C2G，40G SSD）：
 
-```yaml
-tunnel: <tunnel-id>
-credentials-file: %USERPROFILE%\.cloudflared\<tunnel-id>.json
-ingress:
-  - hostname: creator.creator-app.xyz
-    service: http://localhost:3001   # 生产构建，不要改回 5173
-  - service: http_status:404
+```
+访客 → Cloudflare（橙云代理，A 记录 → 47.82.100.178）
+     → 源站 :443（Caddy，自签名证书；Cloudflare SSL 模式 = Full）
+     → Express :3001（systemd 服务 creator-studio，托管 API + 前端构建产物）
 ```
 
-```powershell
-cloudflared tunnel list              # 隧道列表
-cloudflared tunnel info creator-studio   # 连通状态
+- 源站目录：`/opt/creator-studio/server`（`dist` / `public` / `data` / `.env`，以 `creator` 用户运行）
+- 服务管理：
+
+```bash
+systemctl status creator-studio      # 后端
+systemctl restart creator-studio
+journalctl -u creator-studio -f      # 请求与错误日志
+systemctl status caddy               # 反向代理
 ```
+
+- 部署流程：本地 `build.ps1` 构建 → 上传 `server/dist`、`server/public`、`package*.json` → 远端 `npm ci --omit=dev` → 重启服务。配置模板见 `tools/hk/`（`creator-studio.service`、`Caddyfile`）。
+- 源站证书为自签名（`/etc/caddy/origin.crt`），Cloudflare SSL 模式必须保持 **Full**（非 strict）；若换成 Cloudflare Origin Certificate 可升级到 Full (strict)。
+
+### 回滚（旧的家里电脑隧道仍保留）
+
+迁移前站点走"家里 Windows 电脑 + Cloudflare 隧道"。旧隧道与后端仍在运行，作为回滚通道：
+
+- **回滚方法**（Cloudflare → DNS）：把 `creator` 记录从 A（47.82.100.178）改回 CNAME
+  `7b4f2dea-01c5-43b4-b606-d2a7bd835eb9.cfargotunnel.com`（橙云代理），几十秒生效。
+- 确认长期不再需要后，可停掉本机的 `CreatorStudio-Watchdog` 计划任务与开机自启，**保留**每日备份任务。
 
 ### 数据面反代（Supabase 走 Worker）
 
@@ -517,8 +531,8 @@ schtasks /run   /tn "CreatorStudio-SupabaseKeepAlive"
 
 ## 十五、已知限制
 
-- **单机部署**：网站可用性依赖这台 Windows 电脑开机；隧道客户端与后端都跑在本机
-- **免费隧道无 SLA**：Cloudflare 免费版不保证可用性
+- **跨境线路波动**：源站是香港非中国优化线路，晚高峰可能出现丢包/波动（体验远好于原先的家庭电脑隧道，但同样不保证 SLA）
+- **源站证书为自签名**：Cloudflare 到源站加密，但源站证书未受信任；要完全对齐最佳实践，可换成 Cloudflare Origin Certificate 并升级到 Full (strict)
 - **Supabase 免费版**：7 天无活动会暂停（已有每日保活）
 - **云端依赖配置**：账号同步依赖服务端与 Supabase 配置；配置缺失时仅能使用本地功能。多人协作不在当前范围
 - **测试覆盖薄**：仓库包含冒烟、hooks 静态体检、浏览器回归与源码级流程探针。仍无单元测试框架，浏览器回归覆盖面有限且依赖本机装有 Edge

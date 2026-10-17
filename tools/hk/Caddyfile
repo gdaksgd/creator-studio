@@ -1,0 +1,13 @@
+# Creator Studio — 香港源站反向代理
+#
+# 域名在 Cloudflare 后面（橙云代理），边缘到源站走 HTTPS。
+# 源站证书为自签名（/etc/caddy/origin.crt），Cloudflare SSL 模式需设为 Full（非 strict）。
+# 若之后换成 Cloudflare Origin Certificate（可信任证书），把 SSL 模式改为 Full (strict) 即可。
+#
+# 直连 IP 访问 http://<ip>/ 会 301 到 https://creator.creator-app.xyz（Caddy 自动行为）。
+
+creator.creator-app.xyz {
+    tls /etc/caddy/origin.crt /etc/caddy/origin.key
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:3001
+}
