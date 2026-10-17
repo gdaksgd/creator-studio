@@ -79,6 +79,7 @@ export function TrendChart({ data, labels, color, height = 180 }: TrendChartProp
             strokeWidth={2}
             fill={'url(#' + gradId + ')'}
             dot={false}
+            isAnimationActive={false}
             activeDot={{ r: 5, fill: color, stroke: 'var(--surface)', strokeWidth: 2 }}
           />
         </AreaChart>
@@ -120,8 +121,8 @@ export function ComparisonBars({ items }: ComparisonBarsProps) {
             iconType="circle"
             iconSize={8}
           />
-          <Bar dataKey="B站" name="B站" fill={CHART.bili} radius={[6, 6, 0, 0]} maxBarSize={34} />
-          <Bar dataKey="抖音" name="抖音" fill={CHART.douyin} radius={[6, 6, 0, 0]} maxBarSize={34} />
+          <Bar dataKey="B站" name="B站" fill={CHART.bili} radius={[6, 6, 0, 0]} maxBarSize={34} isAnimationActive={false} />
+          <Bar dataKey="抖音" name="抖音" fill={CHART.douyin} radius={[6, 6, 0, 0]} maxBarSize={34} isAnimationActive={false} />
         </BarChart>
       </ResponsiveContainer>
     </div>

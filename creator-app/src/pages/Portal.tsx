@@ -16,6 +16,7 @@ import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { CONTACT } from '../config/contact';
 import { cn } from '../utils/cn';
+import { schedulePagePrefetch, prefetchRoute } from '../utils/prefetch';
 import { markEntered } from '../utils/firstVisit';
 
 /**
@@ -375,6 +376,11 @@ export default function Portal() {
     document.title = 'Creator Studio · 内容工作台';
   }, []);
 
+  // 在门户页停留时就开始预取工作台各页面的代码：进入后第一次点标签页无需等待
+  useEffect(() => {
+    schedulePagePrefetch(1200);
+  }, []);
+
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 12);
     onScroll();
@@ -383,6 +389,7 @@ export default function Portal() {
   }, []);
 
   const enter = (to: string) => {
+    prefetchRoute(to);
     markEntered();
     navigate(to);
   };
@@ -421,7 +428,7 @@ export default function Portal() {
       <header
         className={cn(
           'sticky top-0 z-40 border-b transition-[background-color,border-color,backdrop-filter] duration-300',
-          scrolled ? 'border-border bg-bg/85 backdrop-blur-sm' : 'border-transparent',
+          scrolled ? 'border-border bg-bg/90 lg:backdrop-blur-sm' : 'border-transparent',
         )}
       >
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-6 py-4 sm:px-8">

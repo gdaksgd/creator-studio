@@ -1,15 +1,13 @@
-import { api } from '../api/client';
-import { loadWithCache } from '../services/queryCache';
-
 /**
- * 标签页预取：进入工作台后，利用空闲时间把各页面的代码 chunk 悄悄下好，
- * 之后第一次点开任意标签页就不用再等网络（移动端体感提升最明显）。
- * 顺带预热「分析报告」和「资讯中心」的小时级数据缓存。
+ * 标签页预取：提前把各页面的代码 chunk 下好，第一次点开任意标签页就不用再等网络。
  *
- * 设计约束：
- * - 只在空闲时跑、逐个下载并留间隔，不与首屏和接口请求抢带宽；
+ * - 门户页停留时就开始（进入工作台之前代码已备好），进入工作台后作为兜底再触发一次；
+ * - 并行批次：第一批是「最可能马上点开」的页面，第二批是其余页面，图表库单独延后；
  * - 省流模式（saveData）和 2G 网络下完全跳过；
- * - 全程静默失败，预热只是锦上添花，任何错误都不影响功能。
+ * - 全程静默失败。
+ *
+ * ★ 本模块不得静态 import api / queryCache：它们会经 queryCache 把 Dexie 拉进
+ *   门户页的入口 chunk（首屏关键路径）。数据预热统一在 warmData 里动态 import。
  */
 
 /** 路由 → 页面 chunk（与 App.tsx 的 lazy 声明保持一致） */
@@ -27,11 +25,10 @@ const ROUTE_LOADERS: Record<string, () => Promise<unknown>> = {
   '/analytics': () => import('../pages/Analytics'),
 };
 
-/** 数据预热（key 与页面里保持一致；失败就当没预热） */
-const DATA_WARMERS: Array<() => Promise<unknown>> = [
-  () => loadWithCache('report:game-industry:default', () => api.getReport()),
-  () => loadWithCache('news:all:all:500', () => api.getNews({ limit: 500 })),
-];
+/** 第一批：进入工作台后最可能马上点开的页面（并行下载） */
+const FIRST_BATCH = ['/', '/scripts', '/experiments', '/report', '/marketing-briefs'];
+/** 第二批：其余页面 */
+const SECOND_BATCH = ['/materials', '/library', '/info', '/settings', '/about', '/analytics'];
 
 interface NetworkInformation {
   saveData?: boolean;
@@ -55,52 +52,54 @@ export function prefetchRoute(path: string): void {
 
 let started = false;
 
-/** 进入工作台后调用一次：空闲时逐个预取所有页面 chunk（含图表），最后预热数据缓存 */
-export function scheduleIdlePrefetch(): void {
+/**
+ * 启动预取（全局只跑一次）。门户页在停留时调用、工作台在外壳挂载时兜底调用；
+ * delayMs 用于让当前页面自己的关键资源先走（门户页给主图让路）。
+ */
+export function schedulePagePrefetch(delayMs = 0): void {
   if (started || !shouldPrefetch()) return;
   started = true;
 
-  const begin = () => {
-    const loaders: Array<() => Promise<unknown>> = [
-      ...Object.values(ROUTE_LOADERS),
-      // recharts（charts chunk ≈112 KB gzip）只在数据看板里被动态引用，放在最后预取
-      () => import('../pages/analytics/charts'),
-    ];
+  setTimeout(() => {
+    // 第一批并行
+    for (const path of FIRST_BATCH) prefetchRoute(path);
 
-    let index = 0;
-    const step = () => {
-      const load = loaders[index++];
-      if (!load) {
-        void warmData();
-        return;
-      }
-      load()
-        .catch(() => undefined)
-        .finally(() => {
-          setTimeout(step, 250);
-        });
-    };
-    step();
-  };
+    // 第二批：错开一点，避免和第一批、以及当前页的数据请求挤在一起
+    setTimeout(() => {
+      for (const path of SECOND_BATCH) prefetchRoute(path);
 
-  if ('requestIdleCallback' in window) {
-    (
-      window as Window & {
-        requestIdleCallback: (cb: () => void, options?: { timeout?: number }) => number;
-      }
-    ).requestIdleCallback(begin, { timeout: 4000 });
-  } else {
-    setTimeout(begin, 1500);
-  }
+      // 图表库（recharts）体积与执行成本都偏高，再晚一步单独拉
+      setTimeout(() => {
+        import('../pages/analytics/charts')
+          .catch(() => undefined)
+          .finally(() => {
+            void warmData();
+          });
+      }, 1500);
+    }, 700);
+  }, delayMs);
 }
 
 async function warmData(): Promise<void> {
-  for (const warm of DATA_WARMERS) {
-    try {
-      await warm();
-    } catch {
-      /* ignore */
+  try {
+    // 动态引入，避免把 Dexie / API 客户端拉进门户首屏的静态依赖（见文件头注释）
+    const [{ api }, { loadWithCache }] = await Promise.all([
+      import('../api/client'),
+      import('../services/queryCache'),
+    ]);
+    const warmers: Array<() => Promise<unknown>> = [
+      () => loadWithCache('report:game-industry:default', () => api.getReport()),
+      () => loadWithCache('news:all:all:500', () => api.getNews({ limit: 500 })),
+    ];
+    for (const warm of warmers) {
+      try {
+        await warm();
+      } catch {
+        /* ignore */
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200));
     }
-    await new Promise((resolve) => setTimeout(resolve, 200));
+  } catch {
+    /* 模块加载失败就当没预热 */
   }
 }

@@ -19,7 +19,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '../utils/cn';
-import { prefetchRoute, scheduleIdlePrefetch } from '../utils/prefetch';
+import { prefetchRoute, schedulePagePrefetch } from '../utils/prefetch';
 import { ThemeToggle } from './ui/ThemeToggle';
 import { LoadingBlock } from './ui/Spinner';
 import { Button } from './ui/Button';
@@ -228,9 +228,9 @@ export default function Layout() {
   useAuthExpiredToast();
   const { pathname } = useLocation();
 
-  // 空闲时预取各标签页的代码 chunk，避免第一次点开时现下载（移动端最明显的卡顿源）
+  // 兜底预取：门户页通常已经预热过（见 Portal.tsx），这里调用是无害的 no-op
   useEffect(() => {
-    scheduleIdlePrefetch();
+    schedulePagePrefetch();
   }, []);
 
   // 每页独立标题：多标签、书签与浏览历史里都能看清是哪一页
