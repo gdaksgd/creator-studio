@@ -101,7 +101,8 @@ if (!pushKey && !pushPlus) {
         body: new URLSearchParams({ title, desp: body }),
         signal: AbortSignal.timeout(15000),
       });
-      log(`PUSH  serverchan ${res.ok ? 'OK' : 'FAIL'} HTTP ${res.status}`);
+      const text = (await res.text().catch(() => '')).slice(0, 160);
+      log(`PUSH  serverchan ${res.ok ? 'OK' : 'FAIL'} HTTP ${res.status} ${text}`);
     } catch (err) {
       log(`FAIL  serverchan push: ${err?.message ?? err}`);
     }
@@ -114,7 +115,8 @@ if (!pushKey && !pushPlus) {
         body: JSON.stringify({ token: pushPlus, title, content: body, template: 'markdown' }),
         signal: AbortSignal.timeout(15000),
       });
-      log(`PUSH  pushplus ${res.ok ? 'OK' : 'FAIL'} HTTP ${res.status}`);
+      const text = (await res.text().catch(() => '')).slice(0, 160);
+      log(`PUSH  pushplus ${res.ok ? 'OK' : 'FAIL'} HTTP ${res.status} ${text}`);
     } catch (err) {
       log(`FAIL  pushplus push: ${err?.message ?? err}`);
     }
