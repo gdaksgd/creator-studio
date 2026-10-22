@@ -14,9 +14,11 @@ import type { VideoStat } from '../types.js';
 // ============================================================
 
 const BILI_HEADERS: Record<string, string> = {
-  'User-Agent':
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+  // B站会对来自香港机房、带浏览器 UA 的请求返回 412 HTML 风控页；
+  // 使用中性 UA 反而能正常拿到 JSON。不要改回 Chrome/Safari UA。
+  'User-Agent': 'creator-studio/1.0',
   'Referer': 'https://www.bilibili.com',
+  'Accept': 'application/json, text/plain, */*',
   'Accept-Language': 'zh-CN,zh;q=0.9',
 };
 
@@ -135,7 +137,20 @@ export async function fetchVideoStat(input: string): Promise<VideoStatResult> {
     const resp = await fetch(`https://api.bilibili.com/x/web-interface/view?${query}`, {
       headers: BILI_HEADERS,
     });
-    json = await resp.json();
+    const text = await resp.text();
+    try {
+      json = JSON.parse(text);
+    } catch {
+      if (resp.status === 412) {
+        return { ok: false, error: 'B站风控拦截（HTTP 412）', code: 'RISK_CONTROL' };
+      }
+      const detail = text.replace(/\s+/g, ' ').trim().slice(0, 80);
+      return {
+        ok: false,
+        error: `B站返回非 JSON（HTTP ${resp.status}）：${detail}`,
+        code: 'UPSTREAM',
+      };
+    }
   } catch (err) {
     return { ok: false, error: `请求 B站失败：${(err as Error).message}`, code: 'NETWORK' };
   }
