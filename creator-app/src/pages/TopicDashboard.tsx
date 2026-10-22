@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTopicStore } from '../store/topicStore';
 import { useScriptStore } from '../store/scriptStore';
 import { api } from '../api/client';
@@ -72,6 +72,8 @@ export default function TopicDashboard() {
   const { createScript } = useScriptStore();
   const toast = useToast();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const publishDeepLinkRef = useRef<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [filter, setFilter] = useState<'all' | GameCategory>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | TopicStatus>('all');
@@ -337,6 +339,22 @@ export default function TopicDashboard() {
     setRetrospectiveTags([]);
     setRetrospectiveNote('');
   };
+
+  // 成片任务详情 → 「去记录发布」深链：topics 就绪后打开对应选题的发布弹窗。
+  // ref 防止 StrictMode 双执行重复打开；打开后清除 query，刷新不再弹窗。
+  useEffect(() => {
+    const topicId = searchParams.get('publish');
+    if (!topicId || publishDeepLinkRef.current === topicId) return;
+    const topic = topics.find((item) => item.id === topicId);
+    if (!topic) return;
+    publishDeepLinkRef.current = topicId;
+    openPublish(topic);
+    const next = new URLSearchParams(searchParams);
+    next.delete('publish');
+    setSearchParams(next, { replace: true });
+    // openPublish 只读取传入的 topic，不需要进依赖；ref 已处理重复执行。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, topics, setSearchParams]);
 
   const handleSaveManualPrediction = async () => {
     if (!publishTopicId) return;

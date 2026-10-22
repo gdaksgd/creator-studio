@@ -3,6 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   Bookmark,
   ChartColumn,
+  Clapperboard,
   Compass,
   FlaskConical,
   Megaphone,
@@ -41,6 +42,7 @@ const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
     items: [
       { to: '/', label: '选题看板', desc: '热点评分与选题池', Icon: Layers, end: true },
       { to: '/scripts', label: '脚本编辑', desc: '逐段写作与平台体检', Icon: FileText },
+      { to: '/runs', label: '成片任务', desc: '从脚本到发布交接包', Icon: Clapperboard },
       { to: '/materials', label: '素材工坊', desc: '封面与配图素材', Icon: Images },
       { to: '/library', label: '素材库', desc: '收藏与复用的素材链接', Icon: Bookmark },
       { to: '/experiments', label: '内容实验', desc: '假设验证与内容复盘', Icon: FlaskConical },

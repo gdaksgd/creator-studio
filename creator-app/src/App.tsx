@@ -7,6 +7,8 @@ import { LoadingBlock } from './components/ui/Spinner'
 const Layout = lazy(() => import('./components/Layout'))
 const TopicDashboard = lazy(() => import('./pages/TopicDashboard'))
 const ScriptEditor = lazy(() => import('./pages/ScriptEditor'))
+const ProductionRuns = lazy(() => import('./pages/ProductionRuns'))
+const ProductionRunDetail = lazy(() => import('./pages/ProductionRunDetail'))
 const InfoCenter = lazy(() => import('./pages/InfoCenter'))
 const Analytics = lazy(() => import('./pages/Analytics'))
 const Materials = lazy(() => import('./pages/Materials'))
@@ -53,6 +55,8 @@ function App() {
         <Route path="/" element={<TopicDashboard />} />
         <Route path="/scripts" element={<ScriptEditor />} />
         <Route path="/scripts/:scriptId" element={<ScriptEditor />} />
+        <Route path="/runs" element={<ProductionRuns />} />
+        <Route path="/runs/:runId" element={<ProductionRunDetail />} />
         <Route path="/info" element={<InfoCenter />} />
         <Route path="/analytics" element={<Analytics />} />
         <Route path="/report" element={<Report />} />

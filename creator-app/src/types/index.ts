@@ -248,6 +248,8 @@ export interface TitleEvaluation {
 export type MaterialType = 'bgm' | 'sfx' | 'meme' | 'animation';
 
 export type LibraryAssetType = 'image' | 'video' | 'audio' | 'link' | 'document';
+export type AssetSourceType = 'local' | 'stock' | 'ai' | 'original';
+export type AssetLicense = 'own' | 'licensed' | 'cc' | 'unknown';
 
 /** User-owned reusable reference, kept in local IndexedDB and optional account sync. */
 export interface LibraryAsset {
@@ -262,6 +264,15 @@ export interface LibraryAsset {
   relatedScriptId?: string;
   lastUsedAt?: number;
   favorite?: boolean;
+  /** R4：素材来源与授权元数据；旧记录没有这些字段时显示「未记录」，不推断授权。 */
+  sourceType?: AssetSourceType;
+  license?: AssetLicense;
+  licenseUrl?: string;
+  /** 授权到期时间（毫秒）；未记录 = 不按到期阻塞，但界面会标明未记录。 */
+  expiresAt?: number;
+  allowedPlatforms?: Platform[];
+  checksum?: string;
+  usageCount?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -580,4 +591,307 @@ export interface CoverCheckResponse {
 export interface PlatformCheckInput {
   coverText: string;
   updatedAt: number;
+}
+
+// ───────────────────────── 成片任务（Production Run）v1 ─────────────────────────
+// 一次生产任务对应一个脚本快照、一个平台版本；任务本身不随源脚本变化。
+
+export type RunStatus = 'draft' | 'blocked' | 'review' | 'ready' | 'exported' | 'archived';
+export type RunStageKey = 'lock' | 'preflight' | 'assets' | 'voice' | 'subtitles' | 'review' | 'pack';
+export type RunStageStatus = 'pending' | 'active' | 'done' | 'blocked';
+export type RunCheckLevel = 'block' | 'warn' | 'pass' | 'info';
+export type RunCheckSource = 'local' | 'platform' | 'topic';
+export type RunCheckCategory =
+  | 'script'
+  | 'platform'
+  | 'evidence'
+  | 'assets'
+  | 'rights'
+  | 'pipeline'
+  | 'voice'
+  | 'subtitles';
+
+export interface RunEvidence {
+  source: string;
+  level: 'A' | 'B' | 'C';
+  note?: string;
+}
+
+export interface RunCheck {
+  id: string;
+  category: RunCheckCategory;
+  label: string;
+  level: RunCheckLevel;
+  detail: string;
+  hint?: string;
+  source: RunCheckSource;
+  evidence?: RunEvidence;
+  checkedAt: number;
+}
+
+export type AssetSlotKind = 'video' | 'image' | 'graphic' | 'audio' | 'other' | 'unspecified';
+export type AssetSlotStatus = 'missing' | 'ready' | 'not_needed';
+export type AssetMatchStatus = 'unmatched' | 'suggested' | 'matched' | 'missing';
+export type AssetRightsStatus = 'ok' | 'unknown' | 'expired' | 'platform_blocked';
+
+/** 关联素材库时保存的授权快照；导出 assets.csv 和预检都以此为准。 */
+export interface AssetSlotAssetSnapshot {
+  id: string;
+  title: string;
+  url: string;
+  sourceType?: AssetSourceType;
+  license?: AssetLicense;
+  licenseUrl?: string;
+  expiresAt?: number;
+  allowedPlatforms?: Platform[];
+  checksum?: string;
+}
+
+export interface AssetSlot {
+  id: string;
+  storyboardId: string;
+  sceneNumber: number;
+  description: string;
+  visualDirection: string;
+  duration: number;
+  kind: AssetSlotKind;
+  status: AssetSlotStatus;
+  note: string;
+  /** R4：关联的素材库记录；旧任务没有这些字段时按未关联/未记录处理。 */
+  assetId?: string;
+  assetSnapshot?: AssetSlotAssetSnapshot;
+  matchStatus?: AssetMatchStatus;
+  rightsStatus?: AssetRightsStatus;
+}
+
+export interface RunStage {
+  key: RunStageKey;
+  label: string;
+  status: RunStageStatus;
+  startedAt?: number;
+  finishedAt?: number;
+}
+
+export interface RunSnapshot {
+  capturedAt: number;
+  scriptUpdatedAt: number;
+  script: Omit<Script, 'history'>;
+  topic?: Pick<Topic, 'id' | 'title' | 'category' | 'status' | 'evaluation'> &
+    Partial<Pick<Topic, 'notes' | 'gameDescription' | 'productionIdea'>>;
+  platformCheck?: PlatformCheck;
+  platformCheckError?: string;
+}
+
+export interface RunReview {
+  approved: boolean;
+  reviewer: string;
+  note: string;
+  approvedAt?: number;
+}
+
+export interface RunPackRecord {
+  exportedAt: number;
+  fileName: string;
+  fileCount: number;
+  mode: 'publish' | 'draft';
+  /** 导出后任务内容发生变化时为 true；发布包需要重新导出 */
+  stale?: boolean;
+}
+
+export type RunEventType =
+  | 'created'
+  | 'checked'
+  | 'asset_updated'
+  | 'rights_confirmed'
+  | 'rights_revoked'
+  | 'review_approved'
+  | 'review_revoked'
+  | 'pack_exported'
+  | 'archived'
+  | 'note_updated'
+  | 'publish_bound'
+  | 'publish_unbound'
+  | 'voice_generated'
+  | 'voice_failed'
+  | 'subtitles_generated'
+  | 'subtitles_failed';
+
+/** 运行事件只记录操作摘要，不保存脚本全文、台词或隐私内容。 */
+export interface RunEvent {
+  id: string;
+  type: RunEventType;
+  at: number;
+  actor: string;
+  summary: string;
+  meta?: Record<string, string | number | boolean | null>;
+}
+
+/** 成片任务与选题发布记录的本地绑定；不改动 Topic.published。 */
+export interface RunPublishRef {
+  topicId: string;
+  platform: Platform;
+  bvid?: string;
+  url?: string;
+  title?: string;
+  publishedAt: number;
+  boundAt: number;
+}
+
+export type SubtitlePresetId = 'bilibili' | 'douyin';
+
+export interface RunVoiceBoundary {
+  startMs: number;
+  endMs: number;
+  text: string;
+}
+
+export interface RunVoiceSettings {
+  voice: string;
+  rate: string;
+  pitch: string;
+}
+
+export interface RunVoiceover {
+  status: 'ready' | 'failed';
+  provider: string;
+  voice: string;
+  rate: string;
+  pitch: string;
+  mediaId?: string;
+  fileName?: string;
+  mime?: string;
+  size?: number;
+  durationSec?: number;
+  generatedAt?: number;
+  boundaries?: RunVoiceBoundary[];
+  error?: string;
+}
+
+export interface RunSubtitleCue {
+  index: number;
+  startMs: number;
+  endMs: number;
+  text: string;
+}
+
+export interface RunSubtitles {
+  status: 'ready' | 'failed';
+  preset: SubtitlePresetId;
+  format: 'srt';
+  fileName?: string;
+  cueCount?: number;
+  charCount?: number;
+  maxLineChars?: number;
+  maxCharsPerSecond?: number;
+  timingSource?: 'tts-sentence' | 'estimated';
+  generatedAt?: number;
+  cues?: RunSubtitleCue[];
+  content?: string;
+  error?: string;
+}
+
+export type CostCapability =
+  | 'llm'
+  | 'tts'
+  | 'image'
+  | 'video'
+  | 'stock'
+  | 'platform'
+  | 'data'
+  | 'manual';
+
+/** 一次供应商/操作的成本记录。成本为 null 表示「供应商未返回可核对数字」，不补 0。 */
+export interface RunCostEntry {
+  id: string;
+  runId: string;
+  providerId: string;
+  capability: CostCapability;
+  operation: string;
+  units: number;
+  unitLabel: string;
+  estimatedCost: number | null;
+  actualCost: number | null;
+  currency: 'CNY';
+  source: 'local' | 'api' | 'manual';
+  at: number;
+  note?: string;
+  batchId?: string;
+}
+
+export type RunBatchItemStatus = 'pending' | 'running' | 'done' | 'failed';
+export type RunBatchStatus = 'draft' | 'running' | 'completed' | 'partial' | 'failed';
+
+export interface RunBatchItem {
+  runId: string;
+  scriptId: string;
+  runTitle: string;
+  platform: Platform;
+  version: 'long' | 'short';
+  status: RunBatchItemStatus;
+  attempts: number;
+  error?: string;
+  updatedAt?: number;
+}
+
+export interface RunBatch {
+  id: string;
+  title: string;
+  items: RunBatchItem[];
+  status: RunBatchStatus;
+  concurrency: number;
+  actor?: string;
+  note?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** 本机媒体记录：只在 IndexedDB 里，不进备份/云同步。 */
+export interface RunMediaRecord {
+  id: string;
+  runId: string;
+  kind: 'voiceover';
+  fileName: string;
+  mime: string;
+  size: number;
+  durationSec: number;
+  blob: Blob;
+  createdAt: number;
+}
+
+export interface ProductionRun {
+  id: string;
+  title: string;
+  topicId: string;
+  scriptId: string;
+  platform: Platform;
+  version: 'long' | 'short';
+  /** 流水线 id/version；旧任务没有这两个字段时按 game-longform@1 读取 */
+  pipelineId?: string;
+  pipelineVersion?: string;
+  /** 同组生产：一个 campaign 下挂多条不同平台的 run */
+  campaignId?: string;
+  variantOfRunId?: string;
+  status: RunStatus;
+  stage: RunStageKey;
+  createdAt: number;
+  updatedAt: number;
+  snapshot: RunSnapshot;
+  checks: RunCheck[];
+  assetSlots: AssetSlot[];
+  rightsConfirmed: boolean;
+  review: RunReview;
+  /** 最近一次发布包导出记录；只有 ready 状态才能生成 */
+  pack?: RunPackRecord;
+  /** 最近一次草稿包导出记录；不影响任务状态 */
+  draftPack?: RunPackRecord;
+  /** 追加式操作时间线；旧任务没有这个字段，读取时按 [] 处理 */
+  events?: RunEvent[];
+  /** 绑定的发布记录；只存在本机任务里，不同步云端 */
+  publishRef?: RunPublishRef;
+  /** R5：配音与字幕工件；音频 Blob 存在本机 runMedia 表，不进备份/云同步 */
+  voiceSettings?: RunVoiceSettings;
+  voiceover?: RunVoiceover;
+  subtitles?: RunSubtitles;
+  demo?: boolean;
+  notes: string;
 }

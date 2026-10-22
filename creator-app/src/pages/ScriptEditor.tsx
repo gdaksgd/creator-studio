@@ -616,6 +616,10 @@ export default function ScriptEditor() {
                 <Button variant="secondary" size="sm" onClick={() => setHistoryOpen(true)}>
                   版本历史{selectedScript.history?.length ? ` · ${selectedScript.history.length}` : ''}
                 </Button>
+                <Button variant="secondary" size="sm" onClick={() => navigate(`/runs?create=1&scriptId=${encodeURIComponent(selectedScript.id)}`)}>
+                  <Clapperboard className="h-3.5 w-3.5" aria-hidden="true" />
+                  开始成片
+                </Button>
                 <Button variant="secondary" size="sm" onClick={() => void handleSaveScriptRevision()}>保存版本</Button>
               </div>
               {selectedScript.history?.length ? <p className="mt-2 text-[11px] text-text-muted">已保存 {selectedScript.history.length} 个版本 · 最近快照 {new Date(selectedScript.history[selectedScript.history.length - 1]!.savedAt).toLocaleString('zh-CN')}</p> : null}

@@ -271,7 +271,7 @@ export default function Settings() {
       const result = await seedDemoData();
       setDemoCount(await countDemoData());
       setDemoState(getDemoState());
-      setDemoMessage(`已载入 ${result.topics} 个选题、${result.scripts} 个脚本、${result.briefs} 份简报、${result.experiments} 个实验`);
+      setDemoMessage(`已载入 ${result.topics} 个选题、${result.scripts} 个脚本、${result.briefs} 份简报、${result.experiments} 个实验、${result.runs} 个成片任务`);
     } catch (err) {
       setDemoMessage('载入失败: ' + (err as Error).message);
     } finally {
@@ -321,7 +321,7 @@ export default function Settings() {
     try {
       const backup = await createLocalBackup();
       downloadLocalBackup(backup);
-      toast.success(`备份已导出：${backup.topics.length} 个选题、${backup.scripts.length} 个脚本`);
+      toast.success(`备份已导出：${backup.topics.length} 个选题、${backup.scripts.length} 个脚本、${backup.runs.length} 个成片任务`);
     } catch (err) {
       toast.error('备份导出失败：' + (err as Error).message);
     } finally {
@@ -358,8 +358,8 @@ export default function Settings() {
       setBackupPreview(null);
       setReplaceConfirmOpen(false);
       toast.success(mode === 'replace'
-        ? `本机数据已由备份恢复（${result.topicCount} 个选题、${result.scriptCount} 个脚本）`
-        : `已合并 ${result.topicCount} 个新选题、${result.scriptCount} 个新脚本；同 ID 的本机记录保持不变`);
+        ? `本机数据已由备份恢复（${result.topicCount} 个选题、${result.scriptCount} 个脚本、${result.runCount} 个成片任务）`
+        : `已合并 ${result.topicCount} 个新选题、${result.scriptCount} 个新脚本、${result.runCount} 个新成片任务；同 ID 的本机记录保持不变`);
     } catch (err) {
       setBackupError('恢复失败：' + (err as Error).message);
       toast.error('备份恢复失败：' + (err as Error).message);
@@ -907,7 +907,7 @@ export default function Settings() {
           {backupError && <p role="alert" className="mt-3 rounded-lg border border-danger/30 bg-danger-soft px-3 py-2 text-xs text-danger">{backupError}</p>}
           <p className="mt-3 flex items-start gap-1.5 text-[11px] leading-relaxed text-text-muted">
             <ShieldCheck className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-            <span>备份不会包含登录密码、账号令牌或 AI Key。建议定期下载备份，并保存到安全位置。</span>
+            <span>备份不会包含登录密码、账号令牌、AI Key 或配音/视频媒体文件；成本账本与批量任务会随备份保存。建议定期下载并保存到安全位置。</span>
           </p>
         </Card>
       </section>
@@ -930,6 +930,9 @@ export default function Settings() {
               { label: '选题', value: backupPreview.topicCount },
               { label: '脚本', value: backupPreview.scriptCount },
               { label: '分镜', value: backupPreview.storyboardCount },
+              { label: '成片任务', value: backupPreview.runCount },
+              { label: '成本记录', value: backupPreview.costCount },
+              { label: '批量任务', value: backupPreview.batchCount },
               { label: '演示记录', value: backupPreview.demoCount },
               { label: '素材收藏', value: backupPreview.assetCount },
               { label: '内容实验', value: backupPreview.experimentCount },

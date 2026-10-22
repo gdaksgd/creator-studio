@@ -10,6 +10,7 @@ import { db } from '../db';
 import { useTopicStore } from '../store/topicStore';
 import { useScriptStore } from '../store/scriptStore';
 import { hasToken } from './authService';
+import { createDemoRun } from './runService';
 import type {
   CampaignPlanItem,
   ContentExperiment,
@@ -55,22 +56,24 @@ async function reloadStores() {
 
 /** 当前库里的演示数据条数（选题 + 脚本 + 简报 + 实验） */
 export async function countDemoData(): Promise<number> {
-  const [topics, scripts, workbench] = await Promise.all([
+  const [topics, scripts, workbench, runs] = await Promise.all([
     db.topics.filter((t) => t.id.startsWith(DEMO_PREFIX)).count(),
     db.scripts.filter((s) => s.id.startsWith(DEMO_PREFIX)).count(),
     db.marketingWorkbench.get('workspace'),
+    db.runs.filter((r) => r.id.startsWith(DEMO_PREFIX) || r.demo === true).count(),
   ]);
   const briefs = workbench?.briefs.filter((b) => b.id.startsWith(DEMO_PREFIX)).length ?? 0;
   const experiments =
     workbench?.experiments.filter((e) => e.id.startsWith(DEMO_PREFIX)).length ?? 0;
-  return topics + scripts + briefs + experiments;
+  return topics + scripts + briefs + experiments + runs;
 }
 
 /** 清空演示数据（只删 `demo-` 前缀，真实数据不受影响；营销工作台是单记录混合存储，按条目过滤） */
 export async function clearDemoData(): Promise<void> {
-  await db.transaction('rw', db.topics, db.scripts, db.marketingWorkbench, async () => {
+  await db.transaction('rw', db.topics, db.scripts, db.marketingWorkbench, db.runs, async () => {
     await db.topics.filter((t) => t.id.startsWith(DEMO_PREFIX)).delete();
     await db.scripts.filter((s) => s.id.startsWith(DEMO_PREFIX)).delete();
+    await db.runs.filter((r) => r.id.startsWith(DEMO_PREFIX) || r.demo === true).delete();
     const workbench = await db.marketingWorkbench.get('workspace');
     if (workbench) {
       await db.marketingWorkbench.put({
@@ -91,12 +94,14 @@ export async function seedDemoData(): Promise<{
   scripts: number;
   briefs: number;
   experiments: number;
+  runs: number;
 }> {
   const { topics, scripts } = buildDemoDataset(Date.now());
   const { experiments, briefs } = buildDemoMarketing(Date.now());
-  await db.transaction('rw', db.topics, db.scripts, db.marketingWorkbench, async () => {
+  await db.transaction('rw', db.topics, db.scripts, db.marketingWorkbench, db.runs, async () => {
     await db.topics.filter((t) => t.id.startsWith(DEMO_PREFIX)).delete();
     await db.scripts.filter((s) => s.id.startsWith(DEMO_PREFIX)).delete();
+    await db.runs.filter((r) => r.id.startsWith(DEMO_PREFIX) || r.demo === true).delete();
     // 营销工作台里简报/实验与真实数据混在同一条记录里：只替换 `demo-` 前缀条目
     const workbench = await db.marketingWorkbench.get('workspace');
     await db.marketingWorkbench.put({
@@ -110,7 +115,14 @@ export async function seedDemoData(): Promise<{
   });
   setDemoState('on');
   await reloadStores();
-  return { topics: topics.length, scripts: scripts.length, briefs: briefs.length, experiments: experiments.length };
+  const demoScript = scripts.find((script) => script.storyboards.length >= 3) ?? scripts[0];
+  const demoTopic = demoScript ? topics.find((topic) => topic.id === demoScript.topicId) : undefined;
+  let runs = 0;
+  if (demoScript) {
+    await createDemoRun(demoScript, demoTopic);
+    runs = 1;
+  }
+  return { topics: topics.length, scripts: scripts.length, briefs: briefs.length, experiments: experiments.length, runs };
 }
 
 /**
@@ -130,7 +142,28 @@ export async function ensureDemoData(): Promise<boolean> {
   // 保证更新上线后回访的浏览器也能在简报/实验页看到内容。
   const demoTopics = await db.topics.filter((t) => t.id.startsWith(DEMO_PREFIX)).count();
   if (demoTopics === 0) return false; // 本机是真实创作数据，不注入演示内容
-  return await ensureMarketingDemo();
+  const marketingChanged = await ensureMarketingDemo();
+  const runChanged = await ensureDemoRun();
+  return marketingChanged || runChanged;
+}
+
+/** 演示任务：只创建一次；老访客升级时也能看到成片任务页。 */
+async function ensureDemoRun(): Promise<boolean> {
+  const existing = await db.runs.filter((r) => r.id.startsWith(DEMO_PREFIX) || r.demo === true).toArray();
+  if (existing.length) {
+    // 清理 StrictMode / 并发首次加载可能留下的重复演示任务，只保留最早的一条。
+    if (existing.length > 1) {
+      existing.sort((a, b) => a.createdAt - b.createdAt);
+      await db.runs.bulkDelete(existing.slice(1).map((run) => run.id));
+    }
+    return false;
+  }
+  const scripts = await db.scripts.filter((s) => s.id.startsWith(DEMO_PREFIX)).toArray();
+  const demoScript = scripts.find((script) => script.storyboards.length >= 3) ?? scripts[0];
+  if (!demoScript) return false;
+  const topic = await db.topics.get(demoScript.topicId);
+  await createDemoRun(demoScript, topic);
+  return true;
 }
 
 /** 只补营销工作台缺的演示简报/实验；真实简报/实验原样保留。 */

@@ -141,8 +141,11 @@ function Test-Site {
         } else {
             Write-Check 'vendor chunk referenced' $false 'no /assets/vendor-react-*.js in index.html'
         }
-        Write-Check 'old password purged' (-not ($asset.Body -match [regex]::Escape($script:OldSecret))) `
-                    'secret absent from bundle'
+        # OldSecret 恰好也是公开联系邮箱的前缀（1251971698@qq.com）；
+        # 先移除公开邮箱，避免把联系方式误报成密码泄露。
+        $secretProbeBody = $asset.Body -replace [regex]::Escape('1251971698@qq.com'), ''
+        Write-Check 'old password purged' (-not ($secretProbeBody -match [regex]::Escape($script:OldSecret))) `
+                    'secret absent from bundle (public contact email excluded)'
     } else {
         Write-Check 'bundle asset referenced' $false 'no /assets/index-*.js in index.html'
     }

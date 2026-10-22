@@ -35,7 +35,12 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
   touchAsset: async (id) => {
     const asset = get().assets.find((item) => item.id === id);
     if (!asset) return;
-    const updated = { ...asset, lastUsedAt: Date.now(), updatedAt: Date.now() };
+    const updated = {
+      ...asset,
+      lastUsedAt: Date.now(),
+      usageCount: (asset.usageCount ?? 0) + 1,
+      updatedAt: Date.now(),
+    };
     await db.assets.put(updated);
     set((state) => ({ assets: state.assets.map((item) => item.id === id ? updated : item) }));
     scheduleSyncUpload();

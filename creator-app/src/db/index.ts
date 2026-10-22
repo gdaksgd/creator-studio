@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie';
-import type { Topic, Script, LibraryAsset, MaterialFavorite, BriefAttachment, MarketingWorkbenchRecord } from '../types';
+import type { Topic, Script, LibraryAsset, MaterialFavorite, BriefAttachment, MarketingWorkbenchRecord, ProductionRun, RunMediaRecord, RunCostEntry, RunBatch } from '../types';
 
 class CreatorDB extends Dexie {
   topics!: Table<Topic, string>;
@@ -8,6 +8,10 @@ class CreatorDB extends Dexie {
   materialFavorites!: Table<MaterialFavorite, string>;
   briefAttachments!: Table<BriefAttachment, string>;
   marketingWorkbench!: Table<MarketingWorkbenchRecord, string>;
+  runs!: Table<ProductionRun, string>;
+  runMedia!: Table<RunMediaRecord, string>;
+  runCosts!: Table<RunCostEntry, string>;
+  runBatches!: Table<RunBatch, string>;
 
   constructor() {
     super('CreatorStudio');
@@ -53,6 +57,40 @@ class CreatorDB extends Dexie {
       materialFavorites: 'id, assetId, createdAt',
       briefAttachments: 'id, briefId, assetId, [briefId+assetId], createdAt',
       marketingWorkbench: 'id, updatedAt',
+    });
+    // Version 7: 成片任务。只加新表，不改已有表；v1 任务只存本机，不参与云同步。
+    this.version(7).stores({
+      topics: 'id, category, status, createdAt, plannedPublishAt, productionDueAt',
+      scripts: 'id, topicId, platform, version, createdAt',
+      assets: 'id, type, category, createdAt, updatedAt, folder, relatedScriptId, favorite',
+      materialFavorites: 'id, assetId, createdAt',
+      briefAttachments: 'id, briefId, assetId, [briefId+assetId], createdAt',
+      marketingWorkbench: 'id, updatedAt',
+      runs: 'id, scriptId, platform, status, updatedAt, createdAt',
+    });
+    // Version 9: R5 配音音频只存本机 IndexedDB（Blob），不进备份/云同步。
+    this.version(9).stores({
+      topics: 'id, category, status, createdAt, plannedPublishAt, productionDueAt',
+      scripts: 'id, topicId, platform, version, createdAt',
+      assets: 'id, type, category, createdAt, updatedAt, folder, relatedScriptId, favorite',
+      materialFavorites: 'id, assetId, createdAt',
+      briefAttachments: 'id, briefId, assetId, [briefId+assetId], createdAt',
+      marketingWorkbench: 'id, updatedAt',
+      runs: 'id, scriptId, platform, status, updatedAt, createdAt',
+      runMedia: 'id, runId, kind, createdAt',
+    });
+    // Version 10: R6 成本账本与批量任务；云同步仍不含 runs/costs/batches。
+    this.version(10).stores({
+      topics: 'id, category, status, createdAt, plannedPublishAt, productionDueAt',
+      scripts: 'id, topicId, platform, version, createdAt',
+      assets: 'id, type, category, createdAt, updatedAt, folder, relatedScriptId, favorite',
+      materialFavorites: 'id, assetId, createdAt',
+      briefAttachments: 'id, briefId, assetId, [briefId+assetId], createdAt',
+      marketingWorkbench: 'id, updatedAt',
+      runs: 'id, scriptId, platform, status, updatedAt, createdAt',
+      runMedia: 'id, runId, kind, createdAt',
+      runCosts: 'id, runId, at, providerId, batchId',
+      runBatches: 'id, status, createdAt, updatedAt',
     });
   }
 }

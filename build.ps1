@@ -67,6 +67,9 @@ Write-Host ""
 Write-Host "[3/4] Copying build to server\public ..."
 New-Item -ItemType Directory -Force -Path $pub | Out-Null
 Copy-Item -Path (Join-Path $dist '*') -Destination $pub -Recurse -Force
+# Vite 产物没有 .gz；旧构建留下的预压缩副本会被 Express 优先命中，
+# 导致线上 HTML 仍引用旧 bundle。统一清掉，服务下次启动会按新产物重建。
+Get-ChildItem -LiteralPath $pub -Recurse -File -Filter '*.gz' | Remove-Item -Force
 $assetsDir = Join-Path $pub 'assets'
 if (Test-Path -LiteralPath $assetsDir) {
     $cutoff = (Get-Date).AddDays(-3)
